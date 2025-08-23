@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-    <title>Web FPS Starter</title>
+    <title>Web FPS Roguelike</title>
     <style>
       html, body, #app { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0e0e12; color: #eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
       .hud {
@@ -20,22 +20,28 @@
       }
       .crosshair::before { width: 12px; height: 2px; left: 0; top: 5px; }
       .crosshair::after { width: 2px; height: 12px; left: 5px; top: 0; }
-      .overlay, .pause-overlay {
+      .overlay, .pause-overlay, .death-overlay, .home-overlay {
         position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(20,20,28,0.6), rgba(10,10,14,0.9));
       }
-      .start, .pause-menu {
+      .panel {
         background: #1d1f2a; border: 1px solid #2e3040; padding: 22px 26px; border-radius: 12px; text-align: center;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.35); min-width: 320px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
       }
-      .start button, .pause-menu button {
-        margin-top: 14px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
+      .panel h1 { margin: 0 0 6px 0; font-size: 20px; }
+      .panel h2 { margin: 10px 0 6px 0; font-size: 16px; opacity: 0.9; }
+      .btn {
+        margin-top: 12px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
       }
-      .controls {
-        margin-top: 8px; opacity: 0.85; font-size: 13px; line-height: 1.4;
-      }
-      .field { margin-top: 12px; display: grid; gap: 6px; }
+      .btn.secondary { background: #334155; }
+      .btn.danger { background: #ef4444; }
       .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
-      input[type="range"] { width: 180px; }
+      .grid { display: grid; gap: 10px; }
+      .shop { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+      .shop .item { background: #151824; border: 1px solid #262a3b; padding: 10px; border-radius: 10px; text-align: left; }
+      .shop .item h3 { margin: 0 0 6px 0; font-size: 15px; }
+      .shop .item p { margin: 0 0 6px 0; font-size: 13px; opacity: 0.9; }
+      .shop .item .meta { font-size: 12px; opacity: 0.8; }
+      .stats { font-size: 14px; opacity: 0.9; }
       #damageVignette {
         position: fixed; inset: 0; pointer-events: none;
         background: radial-gradient(ellipse at center, rgba(255,0,0,0.0), rgba(255,0,0,0.18));
@@ -45,46 +51,52 @@
         position: fixed; top: 12px; right: 12px; background: rgba(88, 101, 242, 0.25); border: 1px solid #5865f2; color: #cfd3ff;
         padding: 6px 10px; border-radius: 8px; font-size: 12px; display: none; pointer-events: none;
       }
-      a { color: #9ecbff; }
+      .hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: 0.85; }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div class="hud" id="hud">Health: 100 | Score: 0 | Targets: 0 | Enemies: 0 | FPS: 0</div>
+    <div class="hud" id="hud">Depth: 1 | Gold: 0 | Health: 100 | Weapon: Pistol | FPS: 0</div>
     <div id="protectedBadge">Spawn protection</div>
     <div id="damageVignette"></div>
     <div class="crosshair"></div>
+    <div class="hint" id="hint" style="display:none;">Press E to interact</div>
 
-    <div class="overlay" id="overlay">
-      <div class="start">
-        <div style="font-size:18px; font-weight:700;">Web FPS Starter</div>
-        <div class="controls">
-          WASD: Move • Mouse: Look • Click: Shoot • Space: Jump • Shift: Sprint • P: Pause
-        </div>
-        <div class="field">
-          <label for="startVolume">Volume</label>
+    <!-- Home Screen with Upgrades -->
+    <div class="home-overlay" id="home">
+      <div class="panel" style="min-width: 720px;">
+        <h1>Web FPS Roguelike</h1>
+        <div class="stats" id="homeStats">Wallet Gold: 0</div>
+        <div class="grid" style="margin-top:10px;">
+          <div class="shop" id="shop">
+            <!-- Populated by JS -->
+          </div>
           <div class="row">
-            <input id="startVolume" type="range" min="0" max="100" step="1" value="80" />
-            <span id="startVolumeVal">80%</span>
+            <button class="btn" id="startRunBtn">Start Run</button>
           </div>
         </div>
-        <button id="startBtn">Click to Play</button>
       </div>
     </div>
 
+    <!-- Pause -->
     <div class="pause-overlay" id="pauseOverlay" style="display:none;">
-      <div class="pause-menu">
-        <div style="font-size:18px; font-weight:700;">Paused</div>
-        <div class="field">
-          <label for="pauseVolume">Volume</label>
-          <div class="row">
-            <input id="pauseVolume" type="range" min="0" max="100" step="1" value="80" />
-            <span id="pauseVolumeVal">80%</span>
-          </div>
+      <div class="panel">
+        <h1>Paused</h1>
+        <div class="row" style="gap:12px;">
+          <button class="btn" id="resumeBtn">Resume (P)</button>
+          <button class="btn danger" id="restartBtn">Abort Run</button>
         </div>
-        <div class="row" style="margin-top: 10px; gap: 12px;">
-          <button id="resumeBtn">Resume (P)</button>
-          <button id="restartBtn" style="background:#ef4444;">Restart</button>
+      </div>
+    </div>
+
+    <!-- Death -->
+    <div class="death-overlay" id="death" style="display:none;">
+      <div class="panel" style="min-width: 640px;">
+        <h1>You Died</h1>
+        <div class="stats" id="deathStats">Gold collected: 0</div>
+        <div class="row" style="gap:12px; margin-top: 10px;">
+          <button class="btn" id="toHomeBtn">Go to Home</button>
+          <button class="btn secondary" id="startAgainBtn">Start New Run</button>
         </div>
       </div>
     </div>
