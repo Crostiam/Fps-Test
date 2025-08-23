@@ -440,7 +440,27 @@ export class World {
     for (let i = 0; i < melee; i++) spawnOneAmbient('melee');
     for (let i = 0; i < ranged; i++) spawnOneAmbient('ranged');
   }
-
+// Add inside class World
+spawnPowerups(n = 8) {
+  const kinds = [
+    'health', 'shield', 'damage', 'firerate',
+    'weapon_rifle', 'weapon_shotgun',
+    'ammo_rifle', 'ammo_shotgun'
+  ];
+  for (let i = 0; i < n; i++) {
+    const kind = kinds[i % kinds.length];
+    const mesh = this._makePowerupMesh(kind);
+    const pos = this._randAway(200);
+    mesh.position.set(pos.x, 0.6, pos.z);
+    mesh.userData = {
+      type: 'powerup',
+      kind: kind,
+      spin: Math.random() * Math.PI * 2,
+      label: this._powerupLabel(kind)
+    };
+    this.powerupGroup.add(mesh);
+  }
+}
   spawnEnemyAt(kind, position, scope = 'room', roomId = null) {
     const healthScale = this.difficulty;
     const speedScale = 1 + (this.floor - 1) * 0.05;
