@@ -21,6 +21,12 @@ const damageVignette = document.getElementById('damageVignette');
 const protectedBadge = document.getElementById('protectedBadge');
 const hint = document.getElementById('hint');
 
+// Volume sliders
+const volumeSlider = document.getElementById('volumeSlider');
+const volumeSliderPause = document.getElementById('volumeSliderPause');
+
+// Reward overlay handled in RoomManager
+
 // Weapons UI
 const slotPistol = document.getElementById('slotPistol');
 const slotRifle = document.getElementById('slotRifle');
@@ -54,16 +60,38 @@ scene.add(controls.getObject());
 // Input
 const input = new Input();
 let interactPressed = false;
+let mouseDownLeft = false;
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyE') interactPressed = true; });
+window.addEventListener('mousedown', (e) => {
+  if (state !== State.RUN || isPaused) return;
+  if (e.button === 0) {
+    mouseDownLeft = true;
+    // fire once for semi-auto; auto will continue in loop
+    tryShoot();
+  }
+});
+window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDownLeft = false; });
 
 // World
 const world = new World(scene);
 
-// Rooms
-const rooms = new RoomManager(world, null);
-
 // Sound
 const sound = new Sound();
+sound.init();
+sound.setVolume((Number(volumeSlider && volumeSlider.value) || 80) / 100);
+sound.resume();
+sound.startAmbient();
+sound.startMusic();
+
+// Volume slider hooks (sync both)
+function setAllVolume(v01) {
+  sound.setVolume(v01);
+  const val = Math.round(v01*100);
+  if (volumeSlider) volumeSlider.value = String(val);
+  if (volumeSliderPause) volumeSliderPause.value = String(val);
+}
+if (volumeSlider) volumeSlider.addEventListener('input', () => setAllVolume(Number(volumeSlider.value)/100));
+if (volumeSliderPause) volumeSliderPause.addEventListener('input', () => setAllVolume(Number(volumeSliderPause.value)/100));
 
 // Rays
 const groundRay = new THREE.Raycaster();
@@ -163,9 +191,9 @@ const player = {
 
 // Weapons
 const weapons = {
-  pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0.6, damage: 6, magSize: Infinity, reload: 0 },
-  rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5 },
-  shotgun:{ name: 'Shotgun',fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2 },
+  pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0.6, damage: 6, magSize: Infinity, reload: 0, auto: false },
+  rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
+  shotgun:{ name: 'Shotgun',fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2, auto: false },
 };
 let unlockedWeapons = new Set(['pistol']);
 let currentWeaponKey = 'pistol';
@@ -197,18 +225,14 @@ function applyUpgrades() {
   if (u.startShotgun) unlockedWeapons.add('shotgun');
   currentWeaponKey = unlockedWeapons.has('rifle') ? 'rifle' : 'pistol';
 
-  // Reset ammo for a new run
+  // Reset ammo
   ammo.rifle.mag = 30; ammo.rifle.reserve = 90;
   ammo.shotgun.mag = 6; ammo.shotgun.reserve = 24;
   reloading = false; reloadTimeLeft = 0;
 }
 
 // Weapon models (3 different)
-const guns = {
-  pistol: new THREE.Group(),
-  rifle: new THREE.Group(),
-  shotgun: new THREE.Group()
-};
+const guns = { pistol: new THREE.Group(), rifle: new THREE.Group(), shotgun: new THREE.Group() };
 let recoilT = 0;
 
 function buildGunModels() {
@@ -218,11 +242,9 @@ function buildGunModels() {
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.22, 0.5), new THREE.MeshStandardMaterial({ color: 0x394357, metalness: 0.5, roughness: 0.35 }));
     body.position.set(-0.05, -0.02, 0.25);
     const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.35, 12), new THREE.MeshStandardMaterial({ color: 0xbad7ff, emissive: 0x1f3b7a, emissiveIntensity: 0.25, metalness: 0.8 }));
-    barrel.rotation.z = Math.PI / 2;
-    barrel.position.set(0.18, -0.02, 0.38);
+    barrel.rotation.z = Math.PI / 2; barrel.position.set(0.18, -0.02, 0.38);
     g.add(body, barrel);
-    g.position.set(0.38, -0.32, -0.55);
-    g.rotation.set(-0.05, 0.2, 0);
+    g.position.set(0.38, -0.32, -0.55); g.rotation.set(-0.05, 0.2, 0);
     camera.add(g);
   }
   // Rifle
@@ -237,8 +259,7 @@ function buildGunModels() {
     const stock = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.22, 0.22), new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.55, roughness: 0.25 }));
     stock.position.set(-0.35, -0.02, 0.1);
     g.add(receiver, barrel, handguard, stock);
-    g.position.set(0.35, -0.35, -0.6);
-    g.rotation.set(-0.06, 0.25, 0.0);
+    g.position.set(0.35, -0.35, -0.6); g.rotation.set(-0.06, 0.25, 0.0);
     camera.add(g);
   }
   // Shotgun
@@ -249,11 +270,9 @@ function buildGunModels() {
     const barrel1 = new THREE.Mesh(new THREE.CylinderGeometry(0.065, 0.065, 0.6, 12), new THREE.MeshStandardMaterial({ color: 0xd6a88f, metalness: 0.6, roughness: 0.35 }));
     const barrel2 = barrel1.clone();
     barrel1.rotation.z = barrel2.rotation.z = Math.PI / 2;
-    barrel1.position.set(0.33, 0.05, 0.65);
-    barrel2.position.set(0.33, -0.04, 0.65);
+    barrel1.position.set(0.33, 0.05, 0.65); barrel2.position.set(0.33, -0.04, 0.65);
     g.add(body, barrel1, barrel2);
-    g.position.set(0.35, -0.34, -0.58);
-    g.rotation.set(-0.06, 0.2, 0);
+    g.position.set(0.35, -0.34, -0.58); g.rotation.set(-0.06, 0.2, 0);
     camera.add(g);
   }
   scene.add(camera);
@@ -285,6 +304,9 @@ function updateWeaponsUI() {
 updateWeaponsUI();
 showOnlyGun(currentWeaponKey);
 
+// Rooms (pass applyPickup so rewards apply directly)
+const rooms = new RoomManager(world, sound, (kind) => applyPickup(kind));
+
 // Start/end run flow
 function startRun() {
   state = State.RUN;
@@ -293,18 +315,15 @@ function startRun() {
   applyUpgrades();
   world.startFloor(depth);
 
-  // Rebuild room gates on new run/floor
-  // (Rooms are built from lairs in constructor; fine for now.)
-
   // Spawn and protection
   controls.getObject().position.copy(world.getSpawnPointInsideHouse());
   spawnProtectedTime = 2.0;
   if (protectedBadge) protectedBadge.style.display = 'inline-block';
 
   // Audio + pointer lock
-  if (!sound.ctx) sound.init();
   sound.resume();
   sound.startAmbient();
+  sound.startMusic();
   if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
 
   home.style.display = 'none';
@@ -369,12 +388,6 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Shooting
-window.addEventListener('mousedown', (e) => {
-  if (state !== State.RUN || isPaused) return;
-  if (document.pointerLockElement !== renderer.domElement) return;
-  if (e.button === 0) tryShoot();
-});
-
 function canFire() {
   const now = performance.now() / 1000;
   const def = weapons[currentWeaponKey];
@@ -389,7 +402,7 @@ function canFire() {
 function tryShoot() {
   const def = weapons[currentWeaponKey];
   if (!canFire()) {
-    if (currentWeaponKey !== 'pistol') {
+    if (currentWeaponKey !== 'pistol' && mouseDownLeft) {
       if (!sound.ctx) sound.init(); sound.playEmpty();
     }
     return;
@@ -448,7 +461,7 @@ function shootWeapon(def) {
   }
 
   muzzle.visible = true; setTimeout(() => (muzzle.visible = false), 50);
-  if (!sound.ctx) sound.init(); sound.playShot();
+  sound.playShot();
   recoilT = 0.12;
 }
 
@@ -456,10 +469,10 @@ function onPlayerHit(dmg) {
   if (spawnProtectedTime > 0 || mods.shieldTime > 0) return;
   player.health = Math.max(0, player.health - dmg);
   damageVignette.style.opacity = '1'; setTimeout(() => damageVignette.style.opacity = '0', 120);
-  if (!sound.ctx) sound.init(); sound.playHit();
+  sound.playHit();
   if (player.health <= 0) die();
 }
-function onEnemyShot() { if (!sound.ctx) sound.init(); sound.playEnemyShot(); }
+function onEnemyShot() { sound.playEnemyShot(); }
 
 // Movement
 const moveDir = new THREE.Vector3();
@@ -497,8 +510,7 @@ function updateControls(dt) {
   const obj = controls.getObject();
   const nextPos = obj.position.clone().addScaledVector(player.velocity, dt);
 
-  groundRay.set(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0));
-  groundRay.near = 0; groundRay.far = player.height + 0.5;
+  const groundRay = new THREE.Raycaster(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0), 0, player.height + 0.5);
   const groundHits = groundRay.intersectObjects(scene.children, true)
     .filter(h => ['floor','obstacle','house_wall','arena_wall','rock','castle_wall','castle_tower','pyramid_base','pyramid_wall','ice_wall','ice_crystal'].includes(h.object.name))
     .sort((a,b)=>a.distance-b.distance);
@@ -513,7 +525,7 @@ function updateControls(dt) {
   const horizSpeed = Math.hypot(player.velocity.x, player.velocity.z);
   stepTimer -= dt;
   if (player.onGround && horizSpeed > 2.0 && stepTimer <= 0) {
-    if (!sound.ctx) sound.init(); sound.playStep();
+    sound.playStep();
     stepTimer = 0.42 / Math.min(3, horizSpeed);
   }
 
@@ -522,7 +534,7 @@ function updateControls(dt) {
 
 // Pickups
 function applyPickup(kind) {
-  if (!sound.ctx) sound.init(); sound.playPickup();
+  sound.playPickup();
   switch (kind) {
     case 'health': player.health = Math.min(player.maxHealth, player.health + 25); break;
     case 'shield': mods.shieldTime = Math.max(mods.shieldTime, 6.0); break;
@@ -539,7 +551,7 @@ function applyPickup(kind) {
 
 function onGoldPickup(amount) {
   runGold += amount;
-  if (!sound.ctx) sound.init(); sound.playCoin();
+  sound.playCoin();
 }
 
 // Resize
@@ -559,6 +571,11 @@ function loop() {
   lastTime = now;
 
   if (state === State.RUN) {
+    // Auto-fire handling (rifle)
+    if (mouseDownLeft && weapons[currentWeaponKey].auto) {
+      tryShoot();
+    }
+
     // Reload timer
     if (reloading) {
       reloadTimeLeft -= dt;
@@ -571,10 +588,9 @@ function loop() {
 
     const playerPos = controls.getObject().position;
 
-    // World update
     world.update(dt, playerPos, function(dmg){ onPlayerHit(dmg); }, function(){ onEnemyShot(); }, spawnProtectedTime <= 0 && mods.shieldTime <= 0);
 
-    // Rooms update (clear detection, rewards, gating resume)
+    // Rooms update
     rooms.update(dt);
 
     // Timers
@@ -589,10 +605,10 @@ function loop() {
     // Auto-pick gold by capsule
     world.checkPlayerPickups(playerPos, player.height, function(kind){ applyPickup(kind); }, function(amt){ onGoldPickup(amt); });
 
-    // Interaction priority: reward/powerup prompt, then room entry, then portal text
+    // Interaction prompt: powerup -> room entry -> portal
     let promptShown = false;
 
-    // Powerup interaction (nearest)
+    // Powerup interaction
     const nearP = world.getNearestPowerup(playerPos, 1.6);
     if (nearP) {
       const label = nearP.userData && nearP.userData.label ? nearP.userData.label : 'Powerup';
@@ -605,11 +621,11 @@ function loop() {
       }
     }
 
-    // Room entry (if not already in a room)
+    // Room entry
     if (!promptShown && !rooms.isInRoom()) {
       const nearRoom = rooms.getEnterableRoom(playerPos, 2.2);
       if (nearRoom) {
-        hint.textContent = `Press E to enter ${nearRoom.kind.toUpperCase()} room`;
+        hint.textContent = `Press E to enter room`;
         hint.style.display = 'block';
         promptShown = true;
         if (interactPressed) {
@@ -625,13 +641,12 @@ function loop() {
       if (nearPortal) hint.textContent = 'Enter portal to go deeper';
     }
 
-    // Floor transition via portal
+    // Floor transition
     if (nearPortal) {
       depth += 1;
       world.clearPortals();
-      if (!sound.ctx) sound.init(); sound.playPortal();
+      sound.playPortal();
       world.startFloor(depth);
-      // Note: gates rebuilt by RoomManager constructor initially; existing gates remain fine for now.
       player.health = Math.min(player.maxHealth, player.health + Math.round(player.maxHealth * 0.25));
       spawnProtectedTime = 1.5; if (protectedBadge) protectedBadge.style.display = 'inline-block';
       reloading = false; reloadTimeLeft = 0;
