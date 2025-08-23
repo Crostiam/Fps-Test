@@ -6,16 +6,23 @@ import { Sound } from './Sound.js';
 
 const app = document.getElementById('app');
 const hud = document.getElementById('hud');
+
+// New home UI (roguelike)
 const home = document.getElementById('home');
+const shop = document.getElementById('shop');
+const homeStats = document.getElementById('homeStats');
+const startRunBtn = document.getElementById('startRunBtn') || document.getElementById('startBtn'); // fallback to old start button
+// Legacy start overlay (old build)
+const legacyOverlay = document.getElementById('overlay');
+
+// Pause/Death UI (guard all in case missing in legacy)
 const pauseOverlay = document.getElementById('pauseOverlay');
 const deathOverlay = document.getElementById('death');
 const resumeBtn = document.getElementById('resumeBtn');
-const restartBtn = document.getElementById('restartBtn');
+const restartBtn = document.getElementById('restartBtn'); // abort run to home
 const toHomeBtn = document.getElementById('toHomeBtn');
 const startAgainBtn = document.getElementById('startAgainBtn');
-const startRunBtn = document.getElementById('startRunBtn');
-const homeStats = document.getElementById('homeStats');
-const shop = document.getElementById('shop');
+
 const damageVignette = document.getElementById('damageVignette');
 const protectedBadge = document.getElementById('protectedBadge');
 const hint = document.getElementById('hint');
@@ -96,6 +103,7 @@ function upgradeCost(key, level) {
   return cost;
 }
 function renderShop() {
+  if (!shop || !homeStats) return; // guard for legacy HTML
   homeStats.textContent = `Wallet Gold: ${profile.gold}`;
   shop.innerHTML = '';
   for (const u of UPGS) {
@@ -125,7 +133,8 @@ function renderShop() {
     shop.appendChild(el);
   }
 }
-renderShop();
+// Only render shop if home UI exists
+try { renderShop(); } catch (e) { console.warn('Shop render skipped:', e); }
 
 // Run state
 let depth = 1;
@@ -182,13 +191,11 @@ muzzle.visible = false; muzzle.position.set(0.45, -0.32, 0.05); camera.add(muzzl
 
 // Helpers
 function applyUpgrades() {
-  const u = profile.upgrades;
+  const u = profile.upgrades || {};
   player.maxHealth = 100 + (u.maxHealth || 0) * 10;
   player.health = player.maxHealth;
-  // Speed bonus
   const spdMult = 1 + (u.speed || 0) * 0.04;
   player.baseSpeed = 6.2 * spdMult;
-  // Damage / fireRate multipliers as baseline
   mods.damageMult = 1.0 + (u.damage || 0) * 0.06;
   mods.fireRateMult = 1.0 + (u.fireRate || 0) * 0.06;
 
@@ -197,55 +204,70 @@ function applyUpgrades() {
   if (u.startShotgun) unlockedWeapons.add('shotgun');
   currentWeaponKey = unlockedWeapons.has('rifle') ? 'rifle' : 'pistol';
 }
+
+function hideHomeOverlay() {
+  if (home) home.style.display = 'none';
+  if (legacyOverlay) legacyOverlay.style.display = 'none'; // legacy overlay, if present
+}
+function showHomeOverlay() {
+  if (home) home.style.display = 'grid';
+  if (legacyOverlay) legacyOverlay.style.display = 'grid';
+}
+
 function startRun() {
-  state = State.RUN;
-  runGold = 0;
-  depth = 1;
-  applyUpgrades();
-  world.startFloor(depth);
-  // Move to spawn (inside a house) and protect
-  controls.getObject().position.copy(world.getSpawnPointInsideHouse());
-  spawnProtectedTime = 2.0;
-  protectedBadge.style.display = 'inline-block';
+  try {
+    console.log('[Game] Starting run...');
+    state = State.RUN;
+    runGold = 0;
+    depth = 1;
+    applyUpgrades();
+    world.startFloor(depth);
 
-  // Pointer lock and audio
-  if (!sound.ctx) sound.init();
-  sound.resume();
-  sound.startAmbient();
-  renderer.domElement.requestPointerLock();
+    // Spawn and protect
+    controls.getObject().position.copy(world.getSpawnPointInsideHouse());
+    spawnProtectedTime = 2.0;
+    if (protectedBadge) protectedBadge.style.display = 'inline-block';
 
-  home.style.display = 'none';
-  deathOverlay.style.display = 'none';
+    // Audio + pointer lock
+    if (!sound.ctx) sound.init();
+    sound.resume();
+    sound.startAmbient();
+
+    hideHomeOverlay(); // hide immediately for feedback
+    renderer.domElement.requestPointerLock();
+  } catch (e) {
+    console.error('Failed to start run:', e);
+    // Don’t strand the user behind the overlay
+    hideHomeOverlay();
+  }
 }
 function endRunToHome() {
-  // Add runGold to profile wallet
   profile.gold += runGold;
   saveProfile();
-  renderShop();
-  home.style.display = 'grid';
-  pauseOverlay.style.display = 'none';
-  deathOverlay.style.display = 'none';
+  try { renderShop(); } catch {}
+  showHomeOverlay();
+  if (pauseOverlay) pauseOverlay.style.display = 'none';
+  if (deathOverlay) deathOverlay.style.display = 'none';
   state = State.HOME;
 }
 function die() {
   if (state !== State.RUN) return;
   state = State.DEAD;
-  // Add run gold to wallet
-  profile.gold += runGold; saveProfile(); renderShop();
-  const ds = document.getElementById('deathStats');
-  ds.textContent = `Gold collected: ${runGold} | Depth reached: ${depth}`;
+  profile.gold += runGold; saveProfile();
+  try {
+    const ds = document.getElementById('deathStats');
+    if (ds) ds.textContent = `Gold collected: ${runGold} | Depth reached: ${depth}`;
+  } catch {}
   document.exitPointerLock?.();
-  deathOverlay.style.display = 'grid';
+  if (deathOverlay) deathOverlay.style.display = 'grid';
 }
 
-// UI events
-startRunBtn.addEventListener('click', () => startRun());
-resumeBtn.addEventListener('click', () => setPaused(false));
-restartBtn.addEventListener('click', () => { // abort run to home
-  endRunToHome();
-});
+// UI events (all guarded)
+startRunBtn?.addEventListener('click', () => startRun());
+resumeBtn?.addEventListener('click', () => setPaused(false));
+restartBtn?.addEventListener('click', () => endRunToHome());
 toHomeBtn?.addEventListener('click', () => endRunToHome());
-startAgainBtn?.addEventListener('click', () => { home.style.display = 'none'; startRun(); });
+startAgainBtn?.addEventListener('click', () => { hideHomeOverlay(); startRun(); });
 
 // Pause handling
 let isPaused = false;
@@ -253,7 +275,7 @@ function setPaused(p) {
   if (state !== State.RUN && !(state === State.PAUSE && !p)) return;
   isPaused = p;
   state = p ? State.PAUSE : State.RUN;
-  pauseOverlay.style.display = p ? 'grid' : 'none';
+  if (pauseOverlay) pauseOverlay.style.display = p ? 'grid' : 'none';
   if (p) document.exitPointerLock?.(); else renderer.domElement.requestPointerLock?.();
 }
 document.addEventListener('pointerlockchange', () => {
@@ -265,7 +287,6 @@ window.addEventListener('keydown', (e) => {
     if (state === State.RUN) setPaused(true);
     else if (state === State.PAUSE) setPaused(false);
   }
-  // weapon switching
   if (state === State.RUN) {
     if (e.code === 'Digit1') currentWeaponKey = unlockedWeapons.has('pistol') ? 'pistol' : currentWeaponKey;
     if (e.code === 'Digit2') currentWeaponKey = unlockedWeapons.has('rifle') ? 'rifle' : currentWeaponKey;
@@ -304,7 +325,6 @@ function shootWeapon(def) {
     const damage = Math.round(def.damage * mods.damageMult);
     world.spawnProjectile(start, dir, def.projSpeed, 'player', 2.0, damage);
   }
-  // Fire FX
   muzzle.visible = true; setTimeout(() => (muzzle.visible = false), 50);
   if (!sound.ctx) sound.init(); sound.playShot();
   recoilT = 0.12;
@@ -317,12 +337,10 @@ const right = new THREE.Vector3();
 
 let stepTimer = 0;
 function updateControls(dt) {
-  // Camera basis
   fwd.set(0,0,-1).applyQuaternion(camera.quaternion);
   right.set(1,0,0).applyQuaternion(camera.quaternion);
   fwd.y = 0; right.y = 0; fwd.normalize(); right.normalize();
 
-  // Input -> move
   moveDir.set(0,0,0);
   if (input.forward) moveDir.add(fwd);
   if (input.back) moveDir.sub(fwd);
@@ -339,7 +357,6 @@ function updateControls(dt) {
   player.velocity.x += (desiredVX - player.velocity.x) * Math.min(1, accel * dt);
   player.velocity.z += (desiredVZ - player.velocity.z) * Math.min(1, accel * dt);
 
-  // Gravity/jump
   player.velocity.y -= player.gravity * dt;
   if (input.jump && player.onGround) {
     player.velocity.y = player.jumpSpeed;
@@ -349,7 +366,6 @@ function updateControls(dt) {
   const obj = controls.getObject();
   const nextPos = obj.position.clone().addScaledVector(player.velocity, dt);
 
-  // Ground snap
   groundRay.set(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0));
   groundRay.near = 0; groundRay.far = player.height + 0.5;
   const groundHits = groundRay.intersectObjects(scene.children, true)
@@ -361,10 +377,8 @@ function updateControls(dt) {
     player.velocity.y = 0; player.onGround = true;
   } else { player.onGround = false; }
 
-  // Horizontal collisions
   world.resolveCollisions(nextPos, player.radius, player.height);
 
-  // Footsteps
   const horizSpeed = Math.hypot(player.velocity.x, player.velocity.z);
   stepTimer -= dt;
   if (player.onGround && horizSpeed > 2.0 && stepTimer <= 0) {
@@ -378,7 +392,7 @@ function updateControls(dt) {
 function onPlayerHit(dmg) {
   if (spawnProtectedTime > 0 || mods.shieldTime > 0) return;
   player.health = Math.max(0, player.health - dmg);
-  damageVignette.style.opacity = '1'; setTimeout(() => damageVignette.style.opacity = '0', 120);
+  if (damageVignette) { damageVignette.style.opacity = '1'; setTimeout(() => damageVignette.style.opacity = '0', 120); }
   if (!sound.ctx) sound.init(); sound.playHit();
   if (player.health <= 0) die();
 }
@@ -400,15 +414,15 @@ function applyPickup(kind) {
   switch (kind) {
     case 'health': player.health = Math.min(player.maxHealth, player.health + 25); break;
     case 'shield': mods.shieldTime = Math.max(mods.shieldTime, 6.0); break;
-    case 'damage': mods.damageMult = (profile.upgrades.damage ? 1.0 + profile.upgrades.damage*0.06 : 1.0) * 1.6; modTimers.damageMult = 12.0; break;
-    case 'firerate': mods.fireRateMult = (profile.upgrades.fireRate ? 1.0 + profile.upgrades.fireRate*0.06 : 1.0) * 1.6; modTimers.fireRateMult = 12.0; break;
+    case 'damage': mods.damageMult = (profile.upgrades?.damage ? 1.0 + profile.upgrades.damage*0.06 : 1.0) * 1.6; modTimers.damageMult = 12.0; break;
+    case 'firerate': mods.fireRateMult = (profile.upgrades?.fireRate ? 1.0 + profile.upgrades.fireRate*0.06 : 1.0) * 1.6; modTimers.fireRateMult = 12.0; break;
     case 'weapon_rifle': unlockedWeapons.add('rifle'); currentWeaponKey = 'rifle'; break;
     case 'weapon_shotgun': unlockedWeapons.add('shotgun'); currentWeaponKey = 'shotgun'; break;
   }
 }
 function onGoldPickup(amount) {
   runGold += amount;
-  if (!sound.ctx) sound.init(); sound.playCoin();
+  if (!sound.ctx) sound.init(); sound.playCoin?.();
 }
 
 // Resize
@@ -437,29 +451,25 @@ function loop() {
     // Timers
     if (spawnProtectedTime > 0) {
       spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
-      if (spawnProtectedTime === 0) protectedBadge.style.display = 'none';
+      if (spawnProtectedTime === 0 && protectedBadge) protectedBadge.style.display = 'none';
     }
     if (mods.shieldTime > 0) mods.shieldTime = Math.max(0, mods.shieldTime - dt);
-    if (mods.shieldTime === 0) {} // expire
-    if (modTimers.damageMult > 0) { modTimers.damageMult = Math.max(0, modTimers.damageMult - dt); if (modTimers.damageMult === 0) mods.damageMult = 1.0 + (profile.upgrades.damage || 0)*0.06; }
-    if (modTimers.fireRateMult > 0) { modTimers.fireRateMult = Math.max(0, modTimers.fireRateMult - dt); if (modTimers.fireRateMult === 0) mods.fireRateMult = 1.0 + (profile.upgrades.fireRate || 0)*0.06; }
+    if (modTimers.damageMult > 0) { modTimers.damageMult = Math.max(0, modTimers.damageMult - dt); if (modTimers.damageMult === 0) mods.damageMult = 1.0 + (profile.upgrades?.damage || 0)*0.06; }
+    if (modTimers.fireRateMult > 0) { modTimers.fireRateMult = Math.max(0, modTimers.fireRateMult - dt); if (modTimers.fireRateMult === 0) mods.fireRateMult = 1.0 + (profile.upgrades?.fireRate || 0)*0.06; }
 
     // Pickups
     world.checkPlayerPickups(playerPos, applyPickup, onGoldPickup);
 
     // Portal
     const nearPortal = world.checkPortalEntry(playerPos);
-    hint.style.display = nearPortal ? 'block' : 'none';
+    if (hint) hint.style.display = nearPortal ? 'block' : 'none';
     if (nearPortal) {
-      // Next floor
       depth += 1;
       world.clearPortals();
-      if (!sound.ctx) sound.init(); sound.playPortal();
+      if (!sound.ctx) sound.init(); sound.playPortal?.();
       world.startFloor(depth);
-      // heal a bit on floor transition
       player.health = Math.min(player.maxHealth, player.health + Math.round(player.maxHealth * 0.25));
-      // brief protection
-      spawnProtectedTime = 1.5; protectedBadge.style.display = 'inline-block';
+      spawnProtectedTime = 1.5; if (protectedBadge) protectedBadge.style.display = 'inline-block';
     }
   }
 
@@ -468,12 +478,8 @@ function loop() {
   // HUD
   acc += dt; frames++; if (acc >= 0.25) { fps = Math.round(frames / acc); frames = 0; acc = 0; }
   const wname = weapons[currentWeaponKey].name;
-  hud.textContent = `Depth: ${depth} | Gold: ${runGold} | Health: ${player.health}/${player.maxHealth} | Weapon: ${wname} | FPS: ${fps}`;
+  if (hud) hud.textContent = `Depth: ${depth} | Gold: ${runGold} | Health: ${player.health}/${player.maxHealth} | Weapon: ${wname} | FPS: ${fps}`;
 
   requestAnimationFrame(loop);
 }
 resize(); requestAnimationFrame(loop);
-
-// Notes:
-// - Player-hit from enemy projectiles vs obstacles is handled in World; capsule hit is approximated in World too.
-// - Death is triggered in onPlayerHit when health <= 0.
