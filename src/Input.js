@@ -1,19 +1,26 @@
 export class Input {
   constructor() {
-    this.keys = new Set();
-    this.pointerLocked = false;
+    this.forward = false;
+    this.back = false;
+    this.left = false;
+    this.right = false;
+    this.jump = false;
+    this.sprint = false;
+    this.interact = false;
 
-    window.addEventListener('keydown', (e) => this.keys.add(e.code));
-    window.addEventListener('keyup', (e) => this.keys.delete(e.code));
-    document.addEventListener('pointerlockchange', () => {
-      this.pointerLocked = !!document.pointerLockElement;
-    });
+    window.addEventListener('keydown', (e) => this._onKey(e, true));
+    window.addEventListener('keyup', (e) => this._onKey(e, false));
   }
 
-  get forward() { return this.keys.has('KeyW') || this.keys.has('ArrowUp'); }
-  get back() { return this.keys.has('KeyS') || this.keys.has('ArrowDown'); }
-  get left() { return this.keys.has('KeyA') || this.keys.has('ArrowLeft'); }
-  get right() { return this.keys.has('KeyD') || this.keys.has('ArrowRight'); }
-  get jump() { return this.keys.has('Space'); }
-  get sprint() { return this.keys.has('ShiftLeft') || this.keys.has('ShiftRight'); }
+  _onKey(e, down) {
+    switch (e.code) {
+      case 'KeyW': case 'ArrowUp': this.forward = down; break;
+      case 'KeyS': case 'ArrowDown': this.back = down; break;
+      case 'KeyA': case 'ArrowLeft': this.left = down; break;
+      case 'KeyD': case 'ArrowRight': this.right = down; break;
+      case 'Space': this.jump = down; break;
+      case 'ShiftLeft': case 'ShiftRight': this.sprint = down; break;
+      case 'KeyE': this.interact = down; break;
+    }
+  }
 }
