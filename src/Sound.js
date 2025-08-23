@@ -4,6 +4,7 @@ export class Sound {
     this.master = null;
     this.ambient = null;
     this.muted = false;
+    this.volume = 0.8; // 0..1
     this.lastStepTime = 0;
   }
 
@@ -12,7 +13,7 @@ export class Sound {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     this.ctx = new AudioCtx();
     this.master = this.ctx.createGain();
-    this.master.gain.value = 0.8;
+    this.master.gain.value = this.muted ? 0 : this.volume;
     this.master.connect(this.ctx.destination);
   }
 
@@ -20,7 +21,19 @@ export class Sound {
     this.muted = m;
     if (!this.master) return;
     this.master.gain.cancelScheduledValues(this.ctx.currentTime);
-    this.master.gain.linearRampToValueAtTime(m ? 0 : 0.8, this.ctx.currentTime + 0.05);
+    this.master.gain.linearRampToValueAtTime(m ? 0 : this.volume, this.ctx.currentTime + 0.05);
+  }
+
+  setVolume(vol01) {
+    this.volume = Math.max(0, Math.min(1, vol01));
+    if (!this.master) return;
+    if (this.muted) return;
+    this.master.gain.cancelScheduledValues(this.ctx.currentTime);
+    this.master.gain.linearRampToValueAtTime(this.volume, this.ctx.currentTime + 0.05);
+  }
+
+  getVolume() {
+    return this.volume;
   }
 
   resume() {
@@ -65,6 +78,7 @@ export class Sound {
     }
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
+    src.loop = true;
     src.connect(dest);
     return src;
   }
@@ -116,7 +130,6 @@ export class Sound {
     g.gain.value = 0.08;
     g.connect(this.master);
     const n = this._noise(g, 'brown');
-    n.loop = true;
     n.start();
     this.ambient = n;
   }
