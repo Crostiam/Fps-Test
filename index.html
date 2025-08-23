@@ -34,18 +34,21 @@
       }
       .panel h1 { margin: 0 0 6px 0; font-size: 20px; }
       .btn {
-        margin-top: 12px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
+        margin-top: 10px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
       }
       .btn.secondary { background: #334155; }
       .btn.danger { background: #ef4444; }
-      .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
+      .row { display: flex; gap: 12px; align-items: center; justify-content: center; }
       .grid { display: grid; gap: 10px; }
+
       .shop { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
       .shop .item { background: #151824; border: 1px solid #262a3b; padding: 10px; border-radius: 10px; text-align: left; }
       .shop .item h3 { margin: 0 0 6px 0; font-size: 15px; }
       .shop .item p { margin: 0 0 6px 0; font-size: 13px; opacity: 0.9; }
       .shop .item .meta { font-size: 12px; opacity: 0.8; }
-      .stats { font-size: 14px; opacity: 0.9; }
+
+      .vol { gap: 8px; margin-top: 6px; color: #cbd5e1; font-size: 13px; }
+      .vol input[type="range"] { width: 220px; }
 
       #damageVignette {
         position: fixed; inset: 0; pointer-events: none;
@@ -62,16 +65,25 @@
       #weaponsBar {
         position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
         display: flex; gap: 10px; background: rgba(0,0,0,0.35); border: 1px solid #2e3040; border-radius: 10px; padding: 6px 10px;
-        backdrop-filter: blur(4px);
+        backdrop-filter: blur(4px); z-index: 2;
       }
-      .wslot {
-        min-width: 140px; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; background: rgba(0,0,0,0.25);
-        display: grid; gap: 2px; text-align: left;
-      }
+      .wslot { min-width: 140px; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; background: rgba(0,0,0,0.25);
+        display: grid; gap: 2px; text-align: left; }
       .wslot.active { border-color: #5865f2; background: rgba(88,101,242,0.15); }
       .wname { font-weight: 700; font-size: 13px; }
       .wammo { font-size: 12px; opacity: 0.9; }
       .wlocked { opacity: 0.5; }
+
+      /* Reward picker */
+      #rewardOverlay { z-index: 3; }
+      .cards { display: grid; grid-template-columns: repeat(3, 220px); gap: 14px; margin-top: 12px; }
+      .card {
+        background: #131726; border: 1px solid #273047; border-radius: 12px; padding: 14px; cursor: pointer; user-select: none;
+        transition: transform 120ms ease, border-color 120ms ease, background 120ms ease;
+      }
+      .card:hover { transform: translateY(-3px); border-color: #5865f2; background: #171c2f; }
+      .card h3 { margin: 0 0 6px 0; font-size: 16px; }
+      .card p { margin: 0; font-size: 13px; opacity: 0.9; }
 
       /* Home screen */
       .home-overlay .panel { min-width: 720px; }
@@ -102,11 +114,25 @@
       </div>
     </div>
 
+    <!-- Reward Picker -->
+    <div class="overlay" id="rewardOverlay" style="display:none;">
+      <div class="panel">
+        <h1>Choose a reward</h1>
+        <div class="cards" id="rewardCards"></div>
+        <div class="row" style="margin-top:12px;">
+          <button class="btn secondary" id="skipRewardBtn">Skip</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Home Screen with Upgrades -->
     <div class="home-overlay" id="home">
       <div class="panel">
         <h1>Web FPS Roguelike</h1>
-        <div class="stats" id="homeStats">Wallet Gold: 0</div>
+        <div class="row vol">
+          <span>Master Volume</span>
+          <input id="volumeSlider" type="range" min="0" max="100" value="80" />
+        </div>
         <div class="grid" style="margin-top:10px;">
           <div class="shop" id="shop"></div>
           <div class="row">
@@ -120,7 +146,11 @@
     <div class="pause-overlay" id="pauseOverlay" style="display:none;">
       <div class="panel">
         <h1>Paused</h1>
-        <div class="row" style="gap:12px;">
+        <div class="row vol">
+          <span>Master Volume</span>
+          <input id="volumeSliderPause" type="range" min="0" max="100" value="80" />
+        </div>
+        <div class="row" style="gap:12px; margin-top:10px;">
           <button class="btn" id="resumeBtn">Resume (P)</button>
           <button class="btn danger" id="restartBtn">Abort Run</button>
         </div>
