@@ -1,64 +1,68 @@
 import * as THREE from 'three';
 
-// Simple Isaac-like room system: generate a connected graph of rooms on a grid,
-// build meshes (floor, walls, door gaps, lockable gates), handle encounters,
-// rewards, boss portal, and door-to-door transitions.
 export class RoomManager {
   constructor(world, sound, applyPickupFn) {
     this.world = world;
     this.sound = sound;
     this.applyPickup = applyPickupFn;
 
-    this.rooms = [];          // array of room objects
-    this.roomByKey = new Map(); // "x,y" -> room
-    this.currentRoom = null;  // room object
-    this.groupsRoot = new THREE.Group(); // holds all room groups
+    this.rooms = [];
+    this.roomByKey = new Map();
+    this.currentRoom = null;
+    this.groupsRoot = new THREE.Group();
     this.world.scene.add(this.groupsRoot);
+
+    // Pedestals (interactable rewards)
+    this.pedestals = []; // { mesh, kind, roomId, opened }
+
+    // Minimap
+    this.minimap = document.getElementById('minimap');
+    this.visited = new Set();
+    this.revealed = new Set();
 
     this.rewardOverlay = document.getElementById('rewardOverlay');
     this.rewardCards = document.getElementById('rewardCards');
     this.skipRewardBtn = document.getElementById('skipRewardBtn');
 
-    this.ROOM_SIZE = 26;      // width/depth of interior area (meters)
+    // Room params
+    this.ROOM_SIZE = 26;
     this.WALL_T = 0.6;
     this.DOOR_W = 5.0;
-    this.ROOM_SPACING = 40;   // spacing between rooms in world coords
-    this.locked = false;      // true while a room encounter is active
+    this.ROOM_SPACING = 40;
+
+    this.locked = false;
   }
 
-  // Public: build a fresh floor’s layout/meshes and set starting room.
   generateNewFloor(floor = 1) {
-    // Cleanup previous floor meshes and data
     this._disposeRooms();
 
-    // Generate layout graph
-    const count = 8 + Math.floor(Math.random() * 4); // 8..11 rooms
+    // Generate a small connected graph
+    const count = 8 + Math.floor(Math.random() * 4);
     const graph = this._genGraph(count);
 
-    // Tag rooms: start, boss (farthest), a couple treasure rooms
+    // Assign room types
     const start = graph.find(n => n.x === 0 && n.y === 0) || graph[0];
     start.type = 'start';
-    const far = graph.slice().sort((a,b)=>this._manhattan(b, start)-this._manhattan(a, start))[0];
+    const far = graph.slice().sort((a,b)=>this._manhattan(b,start)-this._manhattan(a,start))[0];
     if (far) far.type = 'boss';
     const rest = graph.filter(n => n !== start && n !== far);
-    for (let i=0;i<Math.min(2, Math.max(0, rest.length-2)); i++) {
-      rest[i].type = 'treasure';
-    }
+    for (let i=0;i<Math.min(2, Math.max(0, rest.length-2)); i++) rest[i].type = 'treasure';
     for (const n of graph) if (!n.type) n.type = 'combat';
 
-    // Build meshes in the scene
+    // Build geometry
     for (const node of graph) this._buildRoom(node);
 
-    // Set current room to start (no fight there)
+    // Start
     this._setCurrentRoom(start);
     this._unlockDoors(start); // start room never locks
+    this._markVisited(start);
+    this._renderMinimap();
   }
 
-  // Called every frame: handle encounter clear and boss portal logic.
   update(dt) {
     if (!this.currentRoom) return;
 
-    // If locked and there are no remaining room-scoped enemies, clear it
+    // Check room clear if locked
     if (this.locked) {
       let remaining = 0;
       for (const e of this.world.enemies) {
@@ -70,12 +74,9 @@ export class RoomManager {
         this._unlockDoors(this.currentRoom);
 
         if (this.currentRoom.type === 'combat') {
-          // Reward picker
-          this._presentRewardPicker(() => {
-            // nothing else
-          });
+          // Spawn a pedestal reward instead of overlay for reliability
+          this._spawnRewardPedestal(this.currentRoom);
         } else if (this.currentRoom.type === 'boss') {
-          // Boss clear: spawn portal at center
           const pos = this._roomWorldCenter(this.currentRoom);
           pos.y = 0.1;
           this.world.spawnPortal(pos);
@@ -84,7 +85,7 @@ export class RoomManager {
     }
   }
 
-  // UI: show hint text for a nearby door if available; returns string or empty
+  // Door usage: blocks walking and bullets until pressing E near the shield
   getDoorHint(playerPos) {
     const d = this._nearestDoorWithin(playerPos, 2.0);
     if (!d || !d.to) return '';
@@ -93,20 +94,19 @@ export class RoomManager {
     return `Press E to enter ${name}`;
   }
 
-  // Handle door interaction; when true, teleportCb(newPos) is called and the room is switched.
   tryUseDoor(playerPos, interactPressed, teleportCb) {
     if (!interactPressed || this.locked) return false;
     const d = this._nearestDoorWithin(playerPos, 2.0);
     if (!d || !d.to) return false;
 
-    // Teleport destination: just inside the opposite door of the target room
+    // Teleport to opposite door inside target room
     const dest = this._doorLandingPosition(d.to, this._oppositeDir(d.dir));
     dest.y = this.world.playerHeight || 1.7;
     teleportCb(dest);
 
     this._setCurrentRoom(d.to);
+    this._markVisited(d.to);
 
-    // Start encounter if needed
     if (!this.currentRoom.cleared) {
       if (this.currentRoom.type === 'combat') this._startCombatEncounter(this.currentRoom);
       if (this.currentRoom.type === 'treasure') this._spawnTreasure(this.currentRoom);
@@ -117,33 +117,62 @@ export class RoomManager {
     return true;
   }
 
-  // ========= Internals =========
+  // Pedestals (crate workaround)
+  getPedestalHint(playerPos) {
+    const p = this._nearestPedestalWithin(playerPos, 2.0);
+    if (!p) return '';
+    return p.opened ? '' : 'Press E to open';
+  }
+  tryOpenPedestal(playerPos, interactPressed) {
+    if (!interactPressed) return false;
+    const p = this._nearestPedestalWithin(playerPos, 2.0);
+    if (!p || p.opened) return false;
+    p.opened = true;
+    // Apply directly and remove pedestal
+    this.applyPickup(p.kind);
+    // FX remove
+    this._removePedestal(p);
+    return true;
+  }
+
+  // ===== Internals =====
 
   _disposeRooms() {
-    // Remove gate blockers from world obstacles
+    // Remove gate/shields from obstacles
     for (const r of this.rooms) {
-      for (const k of Object.keys(r.doors)) {
-        const d = r.doors[k];
+      for (const dir of ['N','S','W','E']) {
+        const d = r.doors[dir];
         if (d && d.blocker) {
           const idx = this.world.obstacles.indexOf(d.blocker);
           if (idx >= 0) this.world.obstacles.splice(idx, 1);
         }
+        if (d && d.shield) {
+          const idx2 = this.world.obstacles.indexOf(d.shield);
+          if (idx2 >= 0) this.world.obstacles.splice(idx2, 1);
+        }
       }
     }
+    // Remove pedestals
+    for (let i=this.pedestals.length-1;i>=0;i--) this._removePedestal(this.pedestals[i]);
+    this.pedestals.length = 0;
+
     // Remove meshes
     while (this.groupsRoot.children.length) this.groupsRoot.remove(this.groupsRoot.children[0]);
-    // Clear caches
     this.rooms = [];
     this.roomByKey.clear();
     this.currentRoom = null;
     this.locked = false;
-    // Also clear portals from previous boss
+
+    // Minimap
+    this.visited.clear();
+    this.revealed.clear();
+
+    // Portals from last boss
     this.world.clearPortals();
   }
 
   _genGraph(targetRooms = 9) {
-    // Basic randomized expansion on a small grid
-    const maxExtent = 3; // roughly -3..3 in each axis
+    const maxExtent = 3;
     const start = { x: 0, y: 0, id: '0,0', type: 'start', neighbors: {}, cleared: false };
     const placed = new Map();
     placed.set(start.id, start);
@@ -168,19 +197,16 @@ export class RoomManager {
       if (!placed.has(key)) {
         const node = { x: pick.nx, y: pick.ny, id: key, type: 'combat', neighbors: {}, cleared: false };
         placed.set(key, node);
-        // link
         cur.neighbors[pick.k] = node;
         node.neighbors[this._oppositeDir(pick.k)] = cur;
         frontier.push(node);
       }
     }
 
-    // Return list with neighbors linked
     return Array.from(placed.values());
   }
 
   _buildRoom(node) {
-    // Build a room group at world position
     const group = new THREE.Group();
     group.position.copy(this._roomOrigin(node));
     group.visible = false;
@@ -197,7 +223,7 @@ export class RoomManager {
     floor.name = 'room_floor';
     group.add(floor);
 
-    // Walls per side; leave door gap when neighbor exists
+    // Walls with door gaps
     const makeWall = (w, d, x, z) => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), matWall);
       m.position.set(x, h/2, z);
@@ -209,67 +235,82 @@ export class RoomManager {
     };
 
     const gap = this.DOOR_W, seg = (size - gap) / 2;
-    // North (z = -half)
+
+    // North
     if (node.neighbors['N']) {
       makeWall(seg, this.WALL_T, -((gap/2) + seg/2), -half + this.WALL_T/2);
       makeWall(seg, this.WALL_T,  ((gap/2) + seg/2), -half + this.WALL_T/2);
+      this._buildDoorSet(node, 'N', group, h);
     } else {
       makeWall(size, this.WALL_T, 0, -half + this.WALL_T/2);
     }
-    // South (z = +half)
+    // South
     if (node.neighbors['S']) {
       makeWall(seg, this.WALL_T, -((gap/2) + seg/2),  half - this.WALL_T/2);
       makeWall(seg, this.WALL_T,  ((gap/2) + seg/2),  half - this.WALL_T/2);
+      this._buildDoorSet(node, 'S', group, h);
     } else {
       makeWall(size, this.WALL_T, 0, half - this.WALL_T/2);
     }
-    // West (x = -half)
+    // West
     if (node.neighbors['W']) {
       makeWall(this.WALL_T, seg, -half + this.WALL_T/2, -((gap/2) + seg/2));
       makeWall(this.WALL_T, seg, -half + this.WALL_T/2,  ((gap/2) + seg/2));
+      this._buildDoorSet(node, 'W', group, h);
     } else {
       makeWall(this.WALL_T, size, -half + this.WALL_T/2, 0);
     }
-    // East (x = +half)
+    // East
     if (node.neighbors['E']) {
       makeWall(this.WALL_T, seg, half - this.WALL_T/2, -((gap/2) + seg/2));
       makeWall(this.WALL_T, seg, half - this.WALL_T/2,  ((gap/2) + seg/2));
+      this._buildDoorSet(node, 'E', group, h);
     } else {
       makeWall(this.WALL_T, size, half - this.WALL_T/2, 0);
     }
 
-    // Door blockers (gates) per open side
-    node.doors = {};
-    const mkGate = (dir) => {
-      const w = dir === 'N' || dir === 'S' ? gap : this.WALL_T;
-      const d = dir === 'N' || dir === 'S' ? this.WALL_T : gap;
-      const offs = this._doorLocalOffset(dir);
-      const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshStandardMaterial({ color: 0x6b7280, metalness: 0.2, roughness: 0.7, emissive: 0x111827, emissiveIntensity: 0.08 }));
-      m.position.copy(offs).setY(h/2);
-      m.visible = false; m.name = 'room_gate';
-      group.add(m);
-      node.doors[dir] = { blocker: m, to: node.neighbors[dir], dir };
-      return m;
-    };
-    for (const dir of ['N','S','W','E']) if (node.neighbors[dir]) mkGate(dir);
-
-    // Store
     node.group = group;
-    node.cleared = (node.type === 'start'); // start room considered clear
+    node.cleared = (node.type === 'start');
     node.id = `${node.x},${node.y}`;
     this.rooms.push(node);
     this.roomByKey.set(node.id, node);
+  }
+
+  _buildDoorSet(node, dir, group, wallH) {
+    const half = this.ROOM_SIZE / 2;
+    const gap = this.DOOR_W;
+
+    // Gate: solid blocker shown when room is locked
+    const gateW = (dir === 'N' || dir === 'S') ? gap : this.WALL_T;
+    const gateD = (dir === 'N' || dir === 'S') ? this.WALL_T : gap;
+    const gatePos = this._doorLocalOffset(dir).setY(wallH/2);
+    const gateMat = new THREE.MeshStandardMaterial({ color: 0x6b7280, metalness: 0.2, roughness: 0.7, emissive: 0x111827, emissiveIntensity: 0.08 });
+    const gate = new THREE.Mesh(new THREE.BoxGeometry(gateW, wallH, gateD), gateMat);
+    gate.position.copy(gatePos); gate.name = 'room_gate'; gate.visible = false;
+    group.add(gate);
+
+    // Shield: always present see-through barrier requiring E to pass, blocks bullets
+    const shieldW = (dir === 'N' || dir === 'S') ? gap : this.WALL_T;
+    const shieldD = (dir === 'N' || dir === 'S') ? this.WALL_T : gap;
+    const shieldPos = this._doorLocalOffset(dir).setY(wallH/2);
+    const shieldMat = new THREE.MeshStandardMaterial({ color: 0x6ee7b7, transparent: true, opacity: 0.15, metalness: 0.0, roughness: 1.0, emissive: 0x10b981, emissiveIntensity: 0.2 });
+    const shield = new THREE.Mesh(new THREE.BoxGeometry(shieldW, wallH, shieldD), shieldMat);
+    shield.position.copy(shieldPos); shield.name = 'door_shield'; shield.visible = true;
+    group.add(shield);
+
+    shield.userData.aabb = new THREE.Box3().setFromObject(shield);
+    shield.userData.static = true;
+    this.world.obstacles.push(shield);
+
+    node.doors = node.doors || {};
+    node.doors[dir] = { blocker: gate, shield: shield, to: node.neighbors[dir], dir };
   }
 
   _setCurrentRoom(room) {
     // Toggle visibility
     for (const r of this.rooms) r.group.visible = (r === room);
     this.currentRoom = room;
-
-    // Minor flourish: change fog (optional)
-    if (this.world.scene && this.world.scene.fog) {
-      this.world.scene.fog.density = 0.015;
-    }
+    this._renderMinimap();
   }
 
   _startCombatEncounter(room) {
@@ -283,7 +324,7 @@ export class RoomManager {
     const melee = 3 + Math.floor((f - 1) * 1.2);
     const ranged = 2 + Math.floor((f - 1) * 0.8);
     const extra = Math.floor(f / 2);
-    const pool = ['skitter','brute','bomber','sniper'];
+    const pool = ['skitter','brute','bomber','sniper','turret','charger'];
 
     for (let i=0;i<melee;i++) this.world.spawnEnemyAt('melee', new THREE.Vector3(center.x + jitter(), 0, center.z + jitter()), 'room', room.id);
     for (let i=0;i<ranged;i++) this.world.spawnEnemyAt('ranged', new THREE.Vector3(center.x + jitter(), 0, center.z + jitter()), 'room', room.id);
@@ -293,86 +334,81 @@ export class RoomManager {
   _startBossEncounter(room) {
     this._lockDoors(room);
     this.locked = true;
-    // Spawn a boss using world's helper at room center
     const center = this._roomWorldCenter(room);
-    // Use one of the three patterns
     const kinds = ['castle','pyramid','ice'];
     const pick = kinds[Math.floor(Math.random()*kinds.length)];
-    // Temporarily set fake lair centers so world._spawnBossFor can use them
     this.world.castle = { center: center }; this.world.pyramid = { center: center }; this.world.icecave = { center: center };
     this.world._spawnBossFor(pick);
   }
 
   _spawnTreasure(room) {
-    // No lock; just spawn 1–2 free powerups
+    // Spawn 1–2 pedestals with rewards
     this._unlockDoors(room);
     const center = this._roomWorldCenter(room);
-    const kinds = ['health','shield','damage','firerate','ammo_rifle','ammo_shotgun','weapon_rifle','weapon_shotgun'];
+    const kinds = ['health','shield','damage','firerate','ammo_rifle','ammo_shotgun','weapon_rifle','weapon_shotgun','weapon_smg','ammo_smg','crit','armor','haste'];
     const count = 1 + Math.floor(Math.random()*2);
     for (let i=0;i<count;i++) {
       const k = kinds[Math.floor(Math.random()*kinds.length)];
-      const mesh = this.world._makePowerupMesh(k);
-      mesh.position.set(center.x + (Math.random()-0.5)*4, 0.6, center.z + (Math.random()-0.5)*4);
-      mesh.userData = { type: 'powerup', kind: k, spin: Math.random()*Math.PI*2, label: this.world._powerupLabel(k) };
-      this.world.powerupGroup.add(mesh);
+      const pos = new THREE.Vector3(center.x + (Math.random()-0.5)*6, 0, center.z + (Math.random()-0.5)*6);
+      this._spawnPedestal(room, k, pos);
     }
     room.cleared = true;
   }
 
-  _presentRewardPicker(done) {
-    const overlay = this.rewardOverlay;
-    const container = this.rewardCards;
-    if (!overlay || !container) { done(); return; }
+  _spawnRewardPedestal(room) {
+    const center = this._roomWorldCenter(room);
+    const rewards = ['health','shield','damage','firerate','ammo_rifle','ammo_shotgun','weapon_rifle','weapon_shotgun','weapon_smg','ammo_smg','crit','armor','haste'];
+    const k = rewards[Math.floor(Math.random()*rewards.length)];
+    this._spawnPedestal(room, k, new THREE.Vector3(center.x, 0, center.z));
+  }
 
-    const rewards = ['health','shield','damage','firerate','ammo_rifle','ammo_shotgun','weapon_rifle','weapon_shotgun'];
-    const picks = [];
-    const pool = rewards.slice();
-    while (picks.length < 3 && pool.length) {
-      const i = Math.floor(Math.random()*pool.length);
-      picks.push(pool.splice(i,1)[0]);
+  _spawnPedestal(room, kind, worldPos) {
+    // Visual: simple pedestal + floating gem
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.9, metalness: 0.1 });
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 0.5, 12), baseMat);
+    base.position.set(worldPos.x, 0.25, worldPos.z);
+    base.name = 'pedestal_base';
+
+    const gemMat = new THREE.MeshStandardMaterial({ color: 0x93c5fd, emissive: 0x3b82f6, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.3 });
+    const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), gemMat);
+    gem.position.set(worldPos.x, 1.0, worldPos.z);
+    gem.name = 'pedestal_gem';
+
+    const group = new THREE.Group();
+    group.add(base); group.add(gem);
+    group.userData = { type: 'pedestal', kind, roomId: room.id, opened: false, spin: Math.random()*Math.PI*2 };
+    this.world.scene.add(group);
+
+    // Add a tiny collision ring to obstacles so shots don’t pass through pedestal
+    base.userData.aabb = new THREE.Box3().setFromObject(base);
+    base.userData.static = true;
+    this.world.obstacles.push(base);
+
+    this.pedestals.push({ mesh: group, kind, roomId: room.id, opened: false });
+  }
+
+  _removePedestal(p) {
+    try {
+      // Remove base from obstacles
+      const base = p.mesh.children.find(c=>c.name==='pedestal_base');
+      if (base) {
+        const idx = this.world.obstacles.indexOf(base);
+        if (idx >= 0) this.world.obstacles.splice(idx, 1);
+      }
+      this.world.scene.remove(p.mesh);
+    } catch {}
+    const i = this.pedestals.indexOf(p);
+    if (i >= 0) this.pedestals.splice(i, 1);
+  }
+
+  _nearestPedestalWithin(playerPos, maxDist) {
+    let best = null, bestD = maxDist;
+    for (const p of this.pedestals) {
+      if (p.opened) continue;
+      const d = p.mesh.position.distanceTo(playerPos);
+      if (d < bestD) { best = p; bestD = d; }
     }
-
-    container.innerHTML = '';
-    const labels = {
-      health: ['+25 Health', 'Restore some health.'],
-      shield: ['Shield', 'Temporary invulnerability.'],
-      damage: ['Damage Boost', 'Deal more damage for a short time.'],
-      firerate: ['Fire Rate Boost', 'Fire faster for a short time.'],
-      ammo_rifle: ['Rifle Ammo', 'Add rifle reserve ammo.'],
-      ammo_shotgun: ['Shotgun Ammo', 'Add shotgun reserve ammo.'],
-      weapon_rifle: ['Unlock Rifle', 'Enable the rifle weapon.'],
-      weapon_shotgun: ['Unlock Shotgun', 'Enable the shotgun weapon.'],
-    };
-
-    const makeCard = (kind, title, desc) => {
-      const div = document.createElement('div');
-      div.className = 'card';
-      div.innerHTML = `<h3>${title}</h3><p>${desc}</p>`;
-      div.addEventListener('click', () => {
-        overlay.style.display = 'none';
-        this.applyPickup(kind);
-        const canvas = document.querySelector('canvas');
-        if (canvas && canvas.requestPointerLock) canvas.requestPointerLock();
-        done();
-      });
-      return div;
-    };
-    for (const k of picks) {
-      const [t,d] = labels[k] || ['Reward','Take this!'];
-      container.appendChild(makeCard(k, t, d));
-    }
-
-    if (this.skipRewardBtn) {
-      this.skipRewardBtn.onclick = () => {
-        overlay.style.display = 'none';
-        const canvas = document.querySelector('canvas');
-        if (canvas && canvas.requestPointerLock) canvas.requestPointerLock();
-        done();
-      };
-    }
-
-    overlay.style.display = 'grid';
-    if (document.exitPointerLock) document.exitPointerLock();
+    return best;
   }
 
   _lockDoors(room) {
@@ -384,6 +420,7 @@ export class RoomManager {
         d.blocker.userData.static = true;
         if (!this.world.obstacles.includes(d.blocker)) this.world.obstacles.push(d.blocker);
       }
+      // Shields always remain to block walk/bullets until E; we keep them visible permanently
     }
   }
   _unlockDoors(room) {
@@ -394,6 +431,7 @@ export class RoomManager {
         const idx = this.world.obstacles.indexOf(d.blocker);
         if (idx >= 0) this.world.obstacles.splice(idx, 1);
       }
+      // Shields remain; you must Press E to pass
     }
   }
 
@@ -409,6 +447,81 @@ export class RoomManager {
     }
     doors.sort((a,b)=>a.dist-b.dist);
     return doors[0] || null;
+  }
+
+  _markVisited(room) {
+    this.visited.add(room.id);
+    // Reveal neighbors
+    this.revealed.add(room.id);
+    for (const dir of ['N','S','W','E']) {
+      const n = room.neighbors[dir];
+      if (n) this.revealed.add(n.id);
+    }
+    this._renderMinimap();
+  }
+
+  _renderMinimap() {
+    const cv = this.minimap;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    ctx.clearRect(0,0,cv.width,cv.height);
+
+    // Compute bounds
+    let xs = [], ys = [];
+    for (const r of this.rooms) { xs.push(r.x); ys.push(r.y); }
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const pad = 8;
+    const w = cv.width - pad*2, h = cv.height - pad*2;
+    const spanX = Math.max(1, maxX - minX + 1);
+    const spanY = Math.max(1, maxY - minY + 1);
+    const cellW = Math.min(24, Math.min(w/spanX, h/spanY));
+
+    // Helper to map grid to canvas
+    const toXY = (rx, ry) => {
+      const cx = pad + (rx - minX + 0.5)*cellW;
+      const cy = pad + (ry - minY + 0.5)*cellW;
+      return { x: cx, y: cy };
+    };
+
+    // Draw links
+    ctx.lineWidth = 2;
+    for (const r of this.rooms) {
+      const a = toXY(r.x, r.y);
+      for (const d of ['N','S','W','E']) {
+        const n = r.neighbors[d];
+        if (!n) continue;
+        const b = toXY(n.x, n.y);
+        ctx.strokeStyle = '#334155';
+        ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke();
+      }
+    }
+
+    // Draw nodes
+    for (const r of this.rooms) {
+      const p = toXY(r.x, r.y);
+      const isVisited = this.visited.has(r.id);
+      const isRevealed = this.revealed.has(r.id);
+      if (!isRevealed) continue;
+
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, cellW*0.3, 0, Math.PI*2);
+      if (r === this.currentRoom) {
+        ctx.fillStyle = '#38bdf8';
+      } else if (isVisited) {
+        ctx.fillStyle = '#94a3b8';
+      } else {
+        ctx.fillStyle = '#334155';
+      }
+      ctx.fill();
+
+      // Type marker
+      if (r.type === 'boss') { ctx.fillStyle = '#f43f5e'; }
+      else if (r.type === 'treasure') { ctx.fillStyle = '#fde047'; }
+      else if (r.type === 'start') { ctx.fillStyle = '#22c55e'; }
+      else { ctx.fillStyle = '#a78bfa'; }
+      ctx.fillRect(p.x-2, p.y-2, 4, 4);
+    }
   }
 
   _doorLocalOffset(dir) {
@@ -427,7 +540,6 @@ export class RoomManager {
     return pos;
   }
   _doorLandingPosition(room, dirIntoRoom) {
-    // landing a bit inside the room from the given side
     const offset = 3.0;
     const base = room.group.position.clone();
     if (dirIntoRoom === 'N') return base.add(new THREE.Vector3(0, 0, -this.ROOM_SIZE/2 + offset));
@@ -435,12 +547,8 @@ export class RoomManager {
     if (dirIntoRoom === 'W') return base.add(new THREE.Vector3(-this.ROOM_SIZE/2 + offset, 0, 0));
     return base.add(new THREE.Vector3( this.ROOM_SIZE/2 - offset, 0, 0));
   }
-  _roomOrigin(node) {
-    return new THREE.Vector3(node.x * this.ROOM_SPACING, 0, node.y * this.ROOM_SPACING);
-  }
-  _roomWorldCenter(node) {
-    return this._roomOrigin(node).clone();
-  }
+  _roomOrigin(node) { return new THREE.Vector3(node.x * this.ROOM_SPACING, 0, node.y * this.ROOM_SPACING); }
+  _roomWorldCenter(node) { return this._roomOrigin(node).clone(); }
   _manhattan(a, b) { return Math.abs(a.x - b.x) + Math.abs(a.y - b.y); }
   _oppositeDir(d) { return d === 'N' ? 'S' : d === 'S' ? 'N' : d === 'W' ? 'E' : 'W'; }
 }
