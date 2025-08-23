@@ -1,6 +1,6 @@
 {
-  "name": "web-fps-starter",
-  "version": "0.1.0",
+  "name": "web-fps-roguelike",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,7 @@
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
-    "three": "^0.167.1"
+    "three": "^0.168.0"
   },
   "devDependencies": {
     "vite": "^5.4.0"
