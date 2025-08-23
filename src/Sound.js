@@ -34,7 +34,6 @@ export class Sound {
     if (this.ctx && this.ctx.state !== 'running') this.ctx.resume();
   }
 
-  // helpers
   _env(duration = 0.15, gain = 0.7) {
     const g = this.ctx.createGain();
     g.gain.value = 0;
