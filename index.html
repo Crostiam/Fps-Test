@@ -33,19 +33,34 @@
       .controls {
         margin-top: 8px; opacity: 0.85; font-size: 13px; line-height: 1.4;
       }
+      #damageVignette {
+        position: fixed; inset: 0; pointer-events: none;
+        background: radial-gradient(ellipse at center, rgba(255,0,0,0.0), rgba(255,0,0,0.18));
+        opacity: 0; transition: opacity 120ms ease-out;
+      }
+      #topRight {
+        position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; pointer-events: auto;
+      }
+      #muteBtn {
+        background: #1d1f2a; color: #eaeaea; border: 1px solid #2e3040; border-radius: 8px; padding: 8px 10px; cursor: pointer;
+      }
       a { color: #9ecbff; }
     </style>
   </head>
   <body>
     <div id="app"></div>
-    <div class="hud" id="hud">Score: 0 | Targets: 0 | FPS: 0</div>
+    <div class="hud" id="hud">Health: 100 | Score: 0 | Targets: 0 | Enemies: 0 | FPS: 0</div>
+    <div id="topRight">
+      <button id="muteBtn" title="M">Sound: On</button>
+    </div>
+    <div id="damageVignette"></div>
     <div class="crosshair"></div>
 
     <div class="overlay" id="overlay">
       <div class="start">
         <div style="font-size:18px; font-weight:700;">Web FPS Starter</div>
         <div class="controls">
-          WASD: Move • Mouse: Look • Click: Shoot • Space: Jump • Shift: Sprint
+          WASD: Move • Mouse: Look • Click: Shoot • Space: Jump • Shift: Sprint • M: Mute
         </div>
         <button id="startBtn">Click to Play</button>
       </div>
