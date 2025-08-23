@@ -15,13 +15,11 @@ const restartBtn = document.getElementById('restartBtn');
 const toHomeBtn = document.getElementById('toHomeBtn');
 const startAgainBtn = document.getElementById('startAgainBtn');
 const startRunBtn = document.getElementById('startRunBtn');
-const homeStats = document.getElementById('homeStats');
-const shop = document.getElementById('shop');
 const damageVignette = document.getElementById('damageVignette');
 const protectedBadge = document.getElementById('protectedBadge');
 const hint = document.getElementById('hint');
 
-// Volume sliders (optional if you added them)
+// Volume sliders (if present)
 const volumeSlider = document.getElementById('volumeSlider');
 const volumeSliderPause = document.getElementById('volumeSliderPause');
 
@@ -29,9 +27,11 @@ const volumeSliderPause = document.getElementById('volumeSliderPause');
 const slotPistol = document.getElementById('slotPistol');
 const slotRifle = document.getElementById('slotRifle');
 const slotShotgun = document.getElementById('slotShotgun');
+const slotSMG = document.getElementById('slotSMG');
 const ammoPistol = document.getElementById('ammoPistol');
 const ammoRifle = document.getElementById('ammoRifle');
 const ammoShotgun = document.getElementById('ammoShotgun');
+const ammoSMG = document.getElementById('ammoSMG');
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', alpha: false });
@@ -64,24 +64,20 @@ window.addEventListener('mousedown', (e) => {
   if (state !== State.RUN || isPaused) return;
   if (e.button === 0) {
     mouseDownLeft = true;
-    tryShoot(); // first shot instantly
+    tryShoot();
   }
 });
 window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDownLeft = false; });
 
-// World
+// World and Rooms
 const world = new World(scene);
-
-// Rooms (Isaac-like)
 const rooms = new RoomManager(world, null, (kind)=>applyPickup(kind));
 
 // Sound
 const sound = new Sound();
 sound.init();
 if (volumeSlider) sound.setVolume((Number(volumeSlider.value) || 80) / 100);
-sound.resume();
-sound.startAmbient();
-sound.startMusic();
+sound.resume(); sound.startAmbient(); sound.startMusic();
 function setAllVolume(v01) {
   sound.setVolume(v01);
   const val = Math.round(v01*100);
@@ -96,33 +92,7 @@ const groundRay = new THREE.Raycaster();
 
 // Game state
 const State = { HOME: 'home', RUN: 'run', PAUSE: 'pause', DEAD: 'dead' };
-let state = State.HOME;
-
-// Profile (meta-upgrades)
-const STORAGE_KEY = 'fps-roguelike-profile';
-function defaultProfile() {
-  return {
-    gold: 0,
-    upgrades: {
-      maxHealth: 0, damage: 0, fireRate: 0, speed: 0,
-      startRifle: 0, startShotgun: 0
-    }
-  };
-}
-function loadProfile() {
-  try { const raw = localStorage.getItem(STORAGE_KEY); if (raw) return JSON.parse(raw); } catch {}
-  return defaultProfile();
-}
-function saveProfile() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(profile)); } catch {} }
-let profile = loadProfile();
-
-// Upgrade shop (unchanged; renderShop omitted for brevity; keep yours)
-function renderShop() {
-  if (!shop || !homeStats) return;
-  homeStats.textContent = `Wallet Gold: ${profile.gold}`;
-  // ... your existing shop rendering code ...
-}
-renderShop();
+let state = State.RUN; // autostart for dev
 
 // Run state
 let depth = 1;
@@ -143,11 +113,12 @@ const player = {
 };
 world.playerHeight = player.height;
 
-// Weapons
+// Weapons (add SMG)
 const weapons = {
   pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0.6, damage: 6, magSize: Infinity, reload: 0, auto: false },
   rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
   shotgun:{ name: 'Shotgun',fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2, auto: false },
+  smg:    { name: 'SMG',    fireRate: 13, projSpeed: 80, pellets: 1, spreadDeg: 2.0, damage: 4, magSize: 40, reload: 1.8, auto: true }
 };
 let unlockedWeapons = new Set(['pistol']);
 let currentWeaponKey = 'pistol';
@@ -155,16 +126,18 @@ let nextFireTime = 0;
 const ammo = {
   pistol: { mag: Infinity, reserve: Infinity },
   rifle:  { mag: 30, reserve: 90 },
-  shotgun:{ mag: 6, reserve: 24 }
+  shotgun:{ mag: 6, reserve: 24 },
+  smg:    { mag: 40, reserve: 160 }
 };
 let reloading = false;
 let reloadTimeLeft = 0;
 
-// Powerup modifiers (temporary)
-const mods = { damageMult: 1.0, fireRateMult: 1.0, shieldTime: 0 };
-const modTimers = { damageMult: 0, fireRateMult: 0 };
+// Mods (new: crit, armor, haste)
+const mods = { damageMult: 1.0, fireRateMult: 1.0, shieldTime: 0, critChance: 0.0, armorMult: 1.0, haste: 0.0 };
+const modTimers = { damageMult: 0, fireRateMult: 0, critChance: 0, armorMult: 0, haste: 0 };
 
-// Apply meta upgrades
+// Basic meta-upgrade scaffold
+const profile = { upgrades: { damage: 0, fireRate: 0, speed: 0, maxHealth: 0, startRifle: 0, startShotgun: 0 } };
 function applyUpgrades() {
   const u = profile.upgrades || {};
   player.maxHealth = 100 + (u.maxHealth || 0) * 10;
@@ -181,11 +154,12 @@ function applyUpgrades() {
 
   ammo.rifle.mag = 30; ammo.rifle.reserve = 90;
   ammo.shotgun.mag = 6; ammo.shotgun.reserve = 24;
+  ammo.smg.mag = 40; ammo.smg.reserve = 160;
   reloading = false; reloadTimeLeft = 0;
 }
 
 // Weapon models
-const guns = { pistol: new THREE.Group(), rifle: new THREE.Group(), shotgun: new THREE.Group() };
+const guns = { pistol: new THREE.Group(), rifle: new THREE.Group(), shotgun: new THREE.Group(), smg: new THREE.Group() };
 let recoilT = 0;
 function buildGunModels() {
   // Pistol
@@ -227,6 +201,17 @@ function buildGunModels() {
     g.position.set(0.35, -0.34, -0.58); g.rotation.set(-0.06, 0.2, 0);
     camera.add(g);
   }
+  // SMG
+  {
+    const g = guns.smg;
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 0.8), new THREE.MeshStandardMaterial({ color: 0x3a4758, metalness: 0.55, roughness: 0.3 }));
+    body.position.set(0.02, 0.02, 0.32);
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.55, 12), new THREE.MeshStandardMaterial({ color: 0x5eead4, emissive: 0x14b8a6, emissiveIntensity: 0.3, metalness: 0.8, roughness: 0.2 }));
+    barrel.rotation.z = Math.PI / 2; barrel.position.set(0.3, 0.02, 0.6);
+    g.add(body, barrel);
+    g.position.set(0.34, -0.33, -0.58); g.rotation.set(-0.06, 0.22, 0);
+    camera.add(g);
+  }
   scene.add(camera);
 }
 buildGunModels();
@@ -240,67 +225,29 @@ function showOnlyGun(key) {
   guns.pistol.visible = (key === 'pistol');
   guns.rifle.visible = (key === 'rifle');
   guns.shotgun.visible = (key === 'shotgun');
+  guns.smg.visible = (key === 'smg');
 }
 function updateWeaponsUI() {
   slotPistol && slotPistol.classList.toggle('active', currentWeaponKey === 'pistol');
   slotRifle && slotRifle.classList.toggle('active', currentWeaponKey === 'rifle');
   slotShotgun && slotShotgun.classList.toggle('active', currentWeaponKey === 'shotgun');
+  slotSMG && slotSMG.classList.toggle('active', currentWeaponKey === 'smg');
   if (slotRifle) slotRifle.classList.toggle('wlocked', !unlockedWeapons.has('rifle'));
   if (slotShotgun) slotShotgun.classList.toggle('wlocked', !unlockedWeapons.has('shotgun'));
+  if (slotSMG) slotSMG.classList.toggle('wlocked', !unlockedWeapons.has('smg'));
   if (ammoPistol) ammoPistol.textContent = 'Ammo: ∞';
   if (ammoRifle) ammoRifle.textContent = `${ammo.rifle.mag} / ${ammo.rifle.reserve}`;
   if (ammoShotgun) ammoShotgun.textContent = `${ammo.shotgun.mag} / ${ammo.shotgun.reserve}`;
+  if (ammoSMG) ammoSMG.textContent = `${ammo.smg.mag} / ${ammo.smg.reserve}`;
 }
 updateWeaponsUI();
 showOnlyGun(currentWeaponKey);
 
-// Start/end run flow
-function startRun() {
-  state = State.RUN;
-  runGold = 0;
-  depth = 1;
-  applyUpgrades();
-
-  world.startFloor(depth);
-  rooms.generateNewFloor(depth);
-
-  // Spawn and protection
-  controls.getObject().position.set(0, player.height, 0);
-  spawnProtectedTime = 1.2;
-  if (protectedBadge) protectedBadge.style.display = 'inline-block';
-
-  // Audio + pointer lock
-  sound.resume(); sound.startAmbient(); sound.startMusic();
-  if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
-
-  home && (home.style.display = 'none');
-  deathOverlay && (deathOverlay.style.display = 'none');
-  updateWeaponsUI();
-  showOnlyGun(currentWeaponKey);
-}
-function endRunToHome() {
-  profile.gold += runGold; saveProfile(); renderShop();
-  home && (home.style.display = 'grid');
-  pauseOverlay && (pauseOverlay.style.display = 'none');
-  deathOverlay && (deathOverlay.style.display = 'none');
-  state = State.HOME;
-}
-function die() {
-  if (state !== State.RUN) return;
-  state = State.DEAD;
-  profile.gold += runGold; saveProfile(); renderShop();
-  const ds = document.getElementById('deathStats');
-  if (ds) ds.textContent = `Gold collected: ${runGold} | Depth reached: ${depth}`;
-  if (document.exitPointerLock) document.exitPointerLock();
-  deathOverlay && (deathOverlay.style.display = 'grid');
-}
-
-// UI events (hook your buttons if present)
-startRunBtn && startRunBtn.addEventListener('click', () => startRun());
-resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
-restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
-toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
-startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
+// Apply meta upgrades and generate first floor
+applyUpgrades();
+world.startFloor(depth);
+rooms.generateNewFloor(depth);
+controls.getObject().position.set(0, player.height, 0);
 
 // Pause handling
 let isPaused = false;
@@ -309,11 +256,8 @@ function setPaused(p) {
   isPaused = p;
   state = p ? State.PAUSE : State.RUN;
   pauseOverlay && (pauseOverlay.style.display = p ? 'grid' : 'none');
-  if (p) {
-    if (document.exitPointerLock) document.exitPointerLock();
-  } else {
-    if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
-  }
+  if (p) { if (document.exitPointerLock) document.exitPointerLock(); }
+  else { if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock(); }
 }
 document.addEventListener('pointerlockchange', () => {
   const locked = document.pointerLockElement === renderer.domElement;
@@ -328,6 +272,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Digit1') { if (unlockedWeapons.has('pistol')) currentWeaponKey = 'pistol'; }
     if (e.code === 'Digit2') { if (unlockedWeapons.has('rifle')) currentWeaponKey = 'rifle'; }
     if (e.code === 'Digit3') { if (unlockedWeapons.has('shotgun')) currentWeaponKey = 'shotgun'; }
+    if (e.code === 'Digit4') { if (unlockedWeapons.has('smg')) currentWeaponKey = 'smg'; }
     if (e.code === 'KeyR') tryReload();
     updateWeaponsUI();
     showOnlyGun(currentWeaponKey);
@@ -348,9 +293,7 @@ function canFire() {
 function tryShoot() {
   const def = weapons[currentWeaponKey];
   if (!canFire()) {
-    if (currentWeaponKey !== 'pistol' && mouseDownLeft) {
-      sound.playEmpty();
-    }
+    if (currentWeaponKey !== 'pistol' && mouseDownLeft) sound.playEmpty();
     return;
   }
   const now = performance.now() / 1000;
@@ -397,7 +340,10 @@ function shootWeapon(def) {
       .add(right.clone().multiplyScalar(Math.tan((yaw * Math.PI)/180)))
       .add(up.clone().multiplyScalar(Math.tan((pitch * Math.PI)/180)))
       .normalize();
-    const damage = Math.round(def.damage * mods.damageMult);
+    // Crit
+    const isCrit = Math.random() < mods.critChance;
+    const dmgBase = Math.round(def.damage * mods.damageMult);
+    const damage = isCrit ? Math.round(dmgBase * 2) : dmgBase;
     world.spawnProjectile(start, dir, def.projSpeed, 'player', 2.0, damage);
   }
 
@@ -409,8 +355,9 @@ function shootWeapon(def) {
 // Hit callbacks
 function onPlayerHit(dmg) {
   if (spawnProtectedTime > 0 || mods.shieldTime > 0) return;
-  player.health = Math.max(0, player.health - dmg);
-  damageVignette && (damageVignette.style.opacity = '1'); setTimeout(() => damageVignette && (damageVignette.style.opacity = '0'), 120);
+  const eff = Math.max(1, Math.round(dmg * mods.armorMult));
+  player.health = Math.max(0, player.health - eff);
+  if (damageVignette) { damageVignette.style.opacity = '1'; setTimeout(() => damageVignette.style.opacity = '0', 120); }
   sound.playHit();
   if (player.health <= 0) die();
 }
@@ -436,7 +383,7 @@ function updateControls(dt) {
   const isMoving = moveDir.lengthSq() > 0.0001;
   if (isMoving) moveDir.normalize();
 
-  const speed = player.baseSpeed * (input.sprint ? player.sprintMult : 1);
+  const speed = player.baseSpeed * (1 + mods.haste) * (input.sprint ? player.sprintMult : 1);
   const accel = isMoving ? 30 : 20;
   const desiredVX = moveDir.x * speed;
   const desiredVZ = moveDir.z * speed;
@@ -452,9 +399,10 @@ function updateControls(dt) {
   const obj = controls.getObject();
   const nextPos = obj.position.clone().addScaledVector(player.velocity, dt);
 
-  const ray = new THREE.Raycaster(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0), 0, player.height + 0.5);
-  const groundHits = ray.intersectObjects(scene.children, true)
-    .filter(h => ['base_floor','room_floor','room_wall','room_gate'].includes(h.object.name))
+  groundRay.set(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0));
+  groundRay.near = 0; groundRay.far = player.height + 0.5;
+  const groundHits = groundRay.intersectObjects(scene.children, true)
+    .filter(h => ['base_floor','room_floor','room_wall','room_gate','door_shield','pedestal_base'].includes(h.object.name))
     .sort((a,b)=>a.distance-b.distance);
   const hit = groundHits[0];
   if (hit && hit.distance <= player.height + 0.05 && player.velocity.y <= 0) {
@@ -474,18 +422,23 @@ function updateControls(dt) {
   obj.position.copy(nextPos);
 }
 
-// Pickups
+// Pickups and rewards
 function applyPickup(kind) {
   sound.playPickup();
   switch (kind) {
     case 'health': player.health = Math.min(player.maxHealth, player.health + 25); break;
     case 'shield': mods.shieldTime = Math.max(mods.shieldTime, 6.0); break;
-    case 'damage': mods.damageMult = (1.0 + (profile.upgrades.damage || 0)*0.06) * 1.6; modTimers.damageMult = 12.0; break;
-    case 'firerate': mods.fireRateMult = (1.0 + (profile.upgrades.fireRate || 0)*0.06) * 1.6; modTimers.fireRateMult = 12.0; break;
+    case 'damage': mods.damageMult = 1.6; modTimers.damageMult = 12.0; break;
+    case 'firerate': mods.fireRateMult = 1.6; modTimers.fireRateMult = 12.0; break;
     case 'weapon_rifle': unlockedWeapons.add('rifle'); currentWeaponKey = 'rifle'; break;
     case 'weapon_shotgun': unlockedWeapons.add('shotgun'); currentWeaponKey = 'shotgun'; break;
-    case 'ammo_rifle': ammo.rifle.reserve += 60; break;
-    case 'ammo_shotgun': ammo.shotgun.reserve += 18; break;
+    case 'weapon_smg': unlockedWeapons.add('smg'); currentWeaponKey = 'smg'; break;
+    case 'ammo_rifle': ammo.rifle.reserve += 90; break;
+    case 'ammo_shotgun': ammo.shotgun.reserve += 24; break;
+    case 'ammo_smg': ammo.smg.reserve += 160; break;
+    case 'crit': mods.critChance = 0.22; modTimers.critChance = 12.0; break;
+    case 'armor': mods.armorMult = 0.8; modTimers.armorMult = 12.0; break;
+    case 'haste': mods.haste = 0.25; modTimers.haste = 10.0; break;
   }
   updateWeaponsUI();
   showOnlyGun(currentWeaponKey);
@@ -506,40 +459,38 @@ function loop() {
   lastTime = now;
 
   if (state === State.RUN) {
-    // Auto-fire for rifle
+    // Auto-fire
     if (mouseDownLeft && weapons[currentWeaponKey].auto) tryShoot();
 
-    // Reload timer
+    // Reload
     if (reloading) { reloadTimeLeft -= dt; if (reloadTimeLeft <= 0) completeReload(); }
 
     if (document.pointerLockElement === renderer.domElement && !isPaused) updateControls(dt);
 
     const playerPos = controls.getObject().position;
-    world.update(dt, playerPos, (d)=>onPlayerHit(d), ()=>onEnemyShot(), spawnProtectedTime <= 0 && mods.shieldTime <= 0);
+    world.update(dt, playerPos, (d)=>onPlayerHit(d), ()=>{}, spawnProtectedTime <= 0 && mods.shieldTime <= 0);
     rooms.update(dt);
 
-    // Timers
-    if (spawnProtectedTime > 0) {
-      spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
-      if (spawnProtectedTime === 0 && protectedBadge) protectedBadge.style.display = 'none';
-    }
-    if (mods.shieldTime > 0) mods.shieldTime = Math.max(0, mods.shieldTime - dt);
-    if (modTimers.damageMult > 0) { modTimers.damageMult = Math.max(0, modTimers.damageMult - dt); if (modTimers.damageMult === 0) mods.damageMult = 1.0 + (profile.upgrades.damage || 0)*0.06; }
-    if (modTimers.fireRateMult > 0) { modTimers.fireRateMult = Math.max(0, modTimers.fireRateMult - dt); if (modTimers.fireRateMult === 0) mods.fireRateMult = 1.0 + (profile.upgrades.fireRate || 0)*0.06; }
+    // Mods timers
+    const decay = (key, base) => { if (modTimers[key] > 0) { modTimers[key] = Math.max(0, modTimers[key] - dt); if (modTimers[key] === 0) mods[key] = base; } };
+    decay('damageMult', 1.0);
+    decay('fireRateMult', 1.0);
+    decay('critChance', 0.0);
+    decay('armorMult', 1.0);
+    decay('haste', 0.0);
 
-    // Auto-pick gold by capsule
+    // Auto-pick gold
     world.checkPlayerPickups(playerPos, player.height, (k)=>applyPickup(k), (amt)=>onGoldPickup(amt));
 
-    // Interaction: door prompt or portal
-    let prompt = rooms.getDoorHint(playerPos);
-    let usedDoor = false;
-    if (rooms.tryUseDoor(playerPos, interactPressed, (dest)=>controls.getObject().position.copy(dest))) {
-      usedDoor = true;
-      prompt = ''; // switch will change context
-    }
+    // Interactions: pedestal > door > portal
+    let prompt = '';
+    if (!prompt) prompt = rooms.getPedestalHint(playerPos);
+    let used = false;
+    if (!used && rooms.tryOpenPedestal(playerPos, interactPressed)) { used = true; }
+    if (!used) prompt = prompt || rooms.getDoorHint(playerPos);
+    if (!used && rooms.tryUseDoor(playerPos, interactPressed, (dest)=>controls.getObject().position.copy(dest))) { used = true; }
     interactPressed = false;
 
-    // Portal (boss clear)
     const nearPortal = world.checkPortalEntry(playerPos);
     if (nearPortal) {
       depth += 1;
@@ -550,14 +501,9 @@ function loop() {
       reloading = false; reloadTimeLeft = 0;
     }
 
-    // Show hint
-    if (!usedDoor) {
-      if (prompt) { hint.style.display = 'block'; hint.textContent = prompt; }
-      else if (nearPortal) { hint.style.display = 'block'; hint.textContent = 'Enter portal to go deeper'; }
-      else { hint.style.display = 'none'; }
-    } else {
-      hint.style.display = 'none';
-    }
+    if (prompt) { hint.style.display = 'block'; hint.textContent = prompt; }
+    else if (nearPortal) { hint.style.display = 'block'; hint.textContent = 'Enter portal to go deeper'; }
+    else { hint.style.display = 'none'; }
 
     // Gun sway/recoil
     animateGun(now*0.001, dt);
@@ -580,9 +526,12 @@ function animateGun(t, dt) {
   const r = recoilT > 0 ? (recoilT / 0.12) : 0; const kick = r * 0.06;
 
   const g = guns[currentWeaponKey];
-  g.position.x = (currentWeaponKey === 'pistol' ? 0.38 : 0.35) + sway;
-  g.position.y = (currentWeaponKey === 'pistol' ? -0.32 : -0.35) + bob - kick*0.5;
-  g.rotation.x = (currentWeaponKey === 'pistol' ? -0.05 : -0.06) - kick;
+  const baseX = currentWeaponKey === 'pistol' ? 0.38 : currentWeaponKey === 'shotgun' ? 0.35 : 0.35;
+  const baseY = currentWeaponKey === 'pistol' ? -0.32 : -0.35;
+  const baseRot = currentWeaponKey === 'pistol' ? -0.05 : -0.06;
+  g.position.x = baseX + sway;
+  g.position.y = baseY + bob - kick*0.5;
+  g.rotation.x = baseRot - kick;
 }
 
 resize(); requestAnimationFrame(loop);
