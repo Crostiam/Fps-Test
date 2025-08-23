@@ -19,7 +19,7 @@ const damageVignette = document.getElementById('damageVignette');
 const protectedBadge = document.getElementById('protectedBadge');
 const hint = document.getElementById('hint');
 
-// Volume sliders (if present)
+// Volume sliders (optional)
 const volumeSlider = document.getElementById('volumeSlider');
 const volumeSliderPause = document.getElementById('volumeSliderPause');
 
@@ -72,6 +72,8 @@ window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDownLeft = 
 // World and Rooms
 const world = new World(scene);
 const rooms = new RoomManager(world, null, (kind)=>applyPickup(kind));
+// Let RoomManager teleport the player (boss clear to start room)
+rooms.setTeleport((dest)=>controls.getObject().position.copy(dest));
 
 // Sound
 const sound = new Sound();
@@ -92,7 +94,7 @@ const groundRay = new THREE.Raycaster();
 
 // Game state
 const State = { HOME: 'home', RUN: 'run', PAUSE: 'pause', DEAD: 'dead' };
-let state = State.RUN; // autostart for dev
+let state = State.HOME;
 
 // Run state
 let depth = 1;
@@ -113,7 +115,7 @@ const player = {
 };
 world.playerHeight = player.height;
 
-// Weapons (add SMG)
+// Weapons (with SMG)
 const weapons = {
   pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0.6, damage: 6, magSize: Infinity, reload: 0, auto: false },
   rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
@@ -132,11 +134,11 @@ const ammo = {
 let reloading = false;
 let reloadTimeLeft = 0;
 
-// Mods (new: crit, armor, haste)
+// Mods (crit, armor, haste)
 const mods = { damageMult: 1.0, fireRateMult: 1.0, shieldTime: 0, critChance: 0.0, armorMult: 1.0, haste: 0.0 };
 const modTimers = { damageMult: 0, fireRateMult: 0, critChance: 0, armorMult: 0, haste: 0 };
 
-// Basic meta-upgrade scaffold
+// Meta (minimal)
 const profile = { upgrades: { damage: 0, fireRate: 0, speed: 0, maxHealth: 0, startRifle: 0, startShotgun: 0 } };
 function applyUpgrades() {
   const u = profile.upgrades || {};
@@ -243,11 +245,52 @@ function updateWeaponsUI() {
 updateWeaponsUI();
 showOnlyGun(currentWeaponKey);
 
-// Apply meta upgrades and generate first floor
-applyUpgrades();
-world.startFloor(depth);
-rooms.generateNewFloor(depth);
-controls.getObject().position.set(0, player.height, 0);
+// Start/end run flow
+function startRun() {
+  state = State.RUN;
+  runGold = 0;
+  depth = 1;
+  applyUpgrades();
+
+  world.startFloor(depth);
+  rooms.generateNewFloor(depth);
+
+  // Spawn and protection
+  controls.getObject().position.set(0, player.height, 0);
+  spawnProtectedTime = 1.2;
+  if (protectedBadge) protectedBadge.style.display = 'inline-block';
+
+  // Audio + pointer lock
+  sound.resume(); sound.startAmbient(); sound.startMusic();
+  if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
+
+  if (home) home.style.display = 'none';
+  if (deathOverlay) deathOverlay.style.display = 'none';
+  updateWeaponsUI();
+  showOnlyGun(currentWeaponKey);
+}
+function endRunToHome() {
+  if (home) home.style.display = 'grid';
+  if (pauseOverlay) pauseOverlay.style.display = 'none';
+  if (deathOverlay) deathOverlay.style.display = 'none';
+  state = State.HOME;
+}
+function die() {
+  if (state !== State.RUN) return;
+  state = State.DEAD;
+  if (document.exitPointerLock) document.exitPointerLock();
+  if (deathOverlay) deathOverlay.style.display = 'grid';
+}
+
+// Show Home on load
+if (home) home.style.display = 'grid';
+
+// UI events
+startRunBtn && startRunBtn.addEventListener('click', () => startRun());
+resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
+restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
+toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
+startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
 
 // Pause handling
 let isPaused = false;
@@ -255,7 +298,7 @@ function setPaused(p) {
   if (state !== State.RUN && !(state === State.PAUSE && !p)) return;
   isPaused = p;
   state = p ? State.PAUSE : State.RUN;
-  pauseOverlay && (pauseOverlay.style.display = p ? 'grid' : 'none');
+  if (pauseOverlay) pauseOverlay.style.display = p ? 'grid' : 'none';
   if (p) { if (document.exitPointerLock) document.exitPointerLock(); }
   else { if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock(); }
 }
@@ -340,7 +383,6 @@ function shootWeapon(def) {
       .add(right.clone().multiplyScalar(Math.tan((yaw * Math.PI)/180)))
       .add(up.clone().multiplyScalar(Math.tan((pitch * Math.PI)/180)))
       .normalize();
-    // Crit
     const isCrit = Math.random() < mods.critChance;
     const dmgBase = Math.round(def.damage * mods.damageMult);
     const damage = isCrit ? Math.round(dmgBase * 2) : dmgBase;
@@ -471,24 +513,28 @@ function loop() {
     world.update(dt, playerPos, (d)=>onPlayerHit(d), ()=>{}, spawnProtectedTime <= 0 && mods.shieldTime <= 0);
     rooms.update(dt);
 
-    // Mods timers
-    const decay = (key, base) => { if (modTimers[key] > 0) { modTimers[key] = Math.max(0, modTimers[key] - dt); if (modTimers[key] === 0) mods[key] = base; } };
-    decay('damageMult', 1.0);
-    decay('fireRateMult', 1.0);
-    decay('critChance', 0.0);
-    decay('armorMult', 1.0);
-    decay('haste', 0.0);
+    // Timers
+    const tickMod = (key, base) => { if (modTimers[key] > 0) { modTimers[key] = Math.max(0, modTimers[key] - dt); if (modTimers[key] === 0) mods[key] = base; } };
+    tickMod('damageMult', 1.0); tickMod('fireRateMult', 1.0); tickMod('critChance', 0.0); tickMod('armorMult', 1.0); tickMod('haste', 0.0);
+
+    if (spawnProtectedTime > 0) {
+      spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
+      if (spawnProtectedTime === 0 && protectedBadge) protectedBadge.style.display = 'none';
+    }
 
     // Auto-pick gold
     world.checkPlayerPickups(playerPos, player.height, (k)=>applyPickup(k), (amt)=>onGoldPickup(amt));
 
     // Interactions: pedestal > door > portal
-    let prompt = '';
-    if (!prompt) prompt = rooms.getPedestalHint(playerPos);
+    let prompt = rooms.getPedestalHint(playerPos);
     let used = false;
-    if (!used && rooms.tryOpenPedestal(playerPos, interactPressed)) { used = true; }
-    if (!used) prompt = prompt || rooms.getDoorHint(playerPos);
-    if (!used && rooms.tryUseDoor(playerPos, interactPressed, (dest)=>controls.getObject().position.copy(dest))) { used = true; }
+    if (rooms.tryOpenPedestal(playerPos, interactPressed)) { used = true; }
+    if (!used) {
+      prompt = prompt || rooms.getDoorHint(playerPos);
+      if (rooms.tryUseDoor(playerPos, interactPressed, (dest)=>controls.getObject().position.copy(dest))) {
+        used = true;
+      }
+    }
     interactPressed = false;
 
     const nearPortal = world.checkPortalEntry(playerPos);
@@ -501,7 +547,7 @@ function loop() {
       reloading = false; reloadTimeLeft = 0;
     }
 
-    if (prompt) { hint.style.display = 'block'; hint.textContent = prompt; }
+    if (prompt && !used) { hint.style.display = 'block'; hint.textContent = prompt; }
     else if (nearPortal) { hint.style.display = 'block'; hint.textContent = 'Enter portal to go deeper'; }
     else { hint.style.display = 'none'; }
 
