@@ -41,12 +41,6 @@
       .row { display: flex; gap: 12px; align-items: center; justify-content: center; }
       .grid { display: grid; gap: 10px; }
 
-      .shop { display: grid; grid-template-columns: repeat(2, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
-      .shop .item { background: #151824; border: 1px solid #262a3b; padding: 10px; border-radius: 10px; text-align: left; }
-      .shop .item h3 { margin: 0 0 6px 0; font-size: 15px; }
-      .shop .item p { margin: 0 0 6px 0; font-size: 13px; opacity: 0.9; }
-      .shop .item .meta { font-size: 12px; opacity: 0.8; }
-
       .vol { gap: 8px; margin-top: 6px; color: #cbd5e1; font-size: 13px; }
       .vol input[type="range"] { width: 220px; }
 
@@ -85,12 +79,19 @@
       .card h3 { margin: 0 0 6px 0; font-size: 16px; }
       .card p { margin: 0; font-size: 13px; opacity: 0.9; }
 
+      /* Minimap */
+      #minimap {
+        position: fixed; top: 10px; right: 10px; width: 180px; height: 180px; background: rgba(0,0,0,0.3); border: 1px solid #2e3040; border-radius: 8px; z-index: 2;
+      }
+
       /* Home screen */
       .home-overlay .panel { min-width: 720px; }
     </style>
   </head>
   <body>
     <div id="app"></div>
+
+    <canvas id="minimap" width="180" height="180"></canvas>
 
     <div class="hud" id="hud">Depth: 1 | Gold: 0 | Health: 100 | Weapon: Pistol | FPS: 0</div>
     <div id="protectedBadge">Spawn protection</div>
@@ -112,6 +113,10 @@
         <div class="wname">[3] Shotgun</div>
         <div class="wammo" id="ammoShotgun">0 / 0</div>
       </div>
+      <div class="wslot wlocked" id="slotSMG">
+        <div class="wname">[4] SMG</div>
+        <div class="wammo" id="ammoSMG">0 / 0</div>
+      </div>
     </div>
 
     <!-- Reward Picker -->
@@ -126,7 +131,7 @@
     </div>
 
     <!-- Home Screen with Upgrades -->
-    <div class="home-overlay" id="home">
+    <div class="home-overlay" id="home" style="display:none;">
       <div class="panel">
         <h1>Web FPS Roguelike</h1>
         <div class="row vol">
