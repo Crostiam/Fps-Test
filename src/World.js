@@ -467,6 +467,40 @@ export class World {
     this.projectiles.push({ pos, vel, ttl, radius, owner, damage, mesh });
   }
 
+  //rockss
+  _scatterRocks(n = 60) {
+    const colors = [0x6b6f7a, 0x545962, 0x3f4450];
+    let placed = 0, attempts = 0;
+    while (placed < n && attempts < n * 20) {
+      attempts++;
+
+      const r = 0.7 + Math.random() * 2.0;
+      const geo = new THREE.IcosahedronGeometry(r, 1);
+      const mat = new THREE.MeshStandardMaterial({
+        color: colors[Math.floor(Math.random() * colors.length)],
+        roughness: 0.95,
+        metalness: 0.02
+      });
+      const rock = new THREE.Mesh(geo, mat);
+
+      // Use the helper that avoids house interiors and no-spawn volumes
+      const pos = this._randAway(220);
+      // If _randAway returned a point we can’t use (very unlikely), skip
+      if (this._pointInsideAnyInterior(pos) || this._pointInsideAnyNoSpawn(pos)) continue;
+
+      rock.position.set(pos.x, r * 0.5, pos.z);
+      rock.rotation.set(Math.random() * 0.3, Math.random() * Math.PI, Math.random() * 0.3);
+      rock.name = 'rock';
+
+      rock.userData.aabb = new THREE.Box3().setFromObject(rock);
+      rock.userData.static = true;
+
+      this.rockGroup.add(rock);
+      this.obstacles.push(rock);
+
+      placed++;
+    }
+  }
   // Gold
   spawnGold(point, amount = 1) {
     const geo = new THREE.IcosahedronGeometry(0.15, 0);
