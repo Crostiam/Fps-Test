@@ -9,7 +9,14 @@ const hud = document.getElementById('hud');
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
 const damageVignette = document.getElementById('damageVignette');
-const muteBtn = document.getElementById('muteBtn');
+const pauseOverlay = document.getElementById('pauseOverlay');
+const resumeBtn = document.getElementById('resumeBtn');
+const restartBtn = document.getElementById('restartBtn');
+const startVolume = document.getElementById('startVolume');
+const startVolumeVal = document.getElementById('startVolumeVal');
+const pauseVolume = document.getElementById('pauseVolume');
+const pauseVolumeVal = document.getElementById('pauseVolumeVal');
+const protectedBadge = document.getElementById('protectedBadge');
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({
@@ -64,6 +71,7 @@ const player = {
   height: 1.7, // eye height
   health: 100,
 };
+let spawnProtectedTime = 2.0;
 
 // Score/FPS
 let score = 0;
@@ -72,7 +80,7 @@ let acc = 0;
 let frames = 0;
 let fps = 0;
 
-// Gun: improved model with recoil and sway
+// Gun: improved simple model with recoil and sway
 const gun = new THREE.Group();
 let recoilT = 0;
 {
@@ -108,50 +116,71 @@ muzzle.visible = false;
 muzzle.position.set(0.45, -0.32, 0.05);
 camera.add(muzzle);
 
+// Start overlay volume binding
+function setAllVolumeFrom(val) {
+  const vol01 = (parseInt(val, 10) || 0) / 100;
+  sound.setVolume(vol01);
+  startVolumeVal.textContent = `${val}%`;
+  pauseVolume.value = String(val);
+  pauseVolumeVal.textContent = `${val}%`;
+}
+startVolume.addEventListener('input', (e) => setAllVolumeFrom(e.target.value));
+pauseVolume.addEventListener('input', (e) => setAllVolumeFrom(e.target.value));
+
 // UI start
 startBtn.addEventListener('click', () => {
+  if (!sound.ctx) sound.init();
+  sound.resume();
+  setAllVolumeFrom(startVolume.value);
+  sound.startAmbient();
+
   renderer.domElement.requestPointerLock();
   overlay.style.display = 'none';
-  sound.init();
-  sound.resume();
-  sound.startAmbient();
+  spawnProtectedTime = 2.0;
+  protectedBadge.style.display = 'inline-block';
 });
 
-muteBtn.addEventListener('click', toggleMute);
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyM') toggleMute();
-});
-function toggleMute() {
-  if (!sound.ctx) sound.init();
-  sound.setMuted(!sound.muted);
-  muteBtn.textContent = `Sound: ${sound.muted ? 'Off' : 'On'}`;
+// Pause/resume
+let isPaused = false;
+function setPaused(p) {
+  isPaused = p;
+  pauseOverlay.style.display = p ? 'grid' : 'none';
+  if (p) {
+    document.exitPointerLock?.();
+  } else {
+    renderer.domElement.requestPointerLock?.();
+  }
 }
+resumeBtn.addEventListener('click', () => setPaused(false));
+restartBtn.addEventListener('click', restartGame);
 
-// Shooting
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyP') {
+    setPaused(!isPaused);
+  }
+});
+
+// Shooting (projectile-based)
 window.addEventListener('mousedown', (e) => {
+  if (isPaused) return;
   if (document.pointerLockElement !== renderer.domElement) return;
   if (e.button === 0) shoot();
 });
 
-function getShootables() {
-  return [...world.targetGroup.children, ...world.enemyGroup.children];
-}
-
 function shoot() {
-  shootRay.setFromCamera({ x: 0, y: 0 }, camera);
-  const intersects = shootRay.intersectObjects(getShootables(), true);
+  // Spawn a projectile from camera forward
+  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const origin = camera.position.clone();
+  // Lift slightly to simulate barrel
+  const start = origin.clone().add(dir.clone().multiplyScalar(0.2));
+  world.spawnProjectile(start, dir, 65, 'player', 2.0);
 
   // Muzzle flash and sound + recoil
   muzzle.visible = true;
   setTimeout(() => (muzzle.visible = false), 50);
+  if (!sound.ctx) sound.init();
   sound.playShot();
   recoilT = 0.12;
-
-  if (intersects.length > 0) {
-    const result = world.handleHit(intersects[0]);
-    if (result.score) score += result.score;
-    flashHit();
-  }
 }
 
 function flashHit() {
@@ -202,7 +231,7 @@ function updateControls(dt) {
   const obj = controls.getObject();
   const nextPos = obj.position.clone().addScaledVector(player.velocity, dt);
 
-  // Stable ground check: cast down from the camera (eye) to find ground within eye-height + epsilon
+  // Stable ground check
   groundRay.set(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0));
   groundRay.near = 0;
   groundRay.far = player.height + 0.5;
@@ -213,7 +242,6 @@ function updateControls(dt) {
 
   const hit = groundHits[0];
   if (hit && hit.distance <= player.height + 0.05 && player.velocity.y <= 0) {
-    // Snap so eye is exactly player.height above the ground hit point
     nextPos.y = hit.point.y + player.height;
     player.velocity.y = 0;
     player.onGround = true;
@@ -228,19 +256,27 @@ function updateControls(dt) {
   const horizSpeed = Math.hypot(player.velocity.x, player.velocity.z);
   stepTimer -= dt;
   if (player.onGround && horizSpeed > 2.0 && stepTimer <= 0) {
+    if (!sound.ctx) sound.init();
     sound.playStep();
-    stepTimer = 0.42 / Math.min(3, horizSpeed); // faster when sprinting
+    stepTimer = 0.42 / Math.min(3, horizSpeed);
   }
 
   obj.position.copy(nextPos);
 }
 
 function onPlayerHit(dmg) {
+  if (spawnProtectedTime > 0) return;
   player.health = Math.max(0, player.health - dmg);
   // Damage feedback
   damageVignette.style.opacity = '1';
   setTimeout(() => damageVignette.style.opacity = '0', 120);
+  if (!sound.ctx) sound.init();
   sound.playHit();
+}
+
+function onEnemyShot() {
+  if (!sound.ctx) sound.init();
+  sound.playEnemyShot();
 }
 
 function animateGun(t, dt) {
@@ -267,24 +303,51 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
+function restartGame() {
+  // Reset world dynamics
+  world.resetDynamic();
+
+  // Reset player
+  player.velocity.set(0, 0, 0);
+  player.health = 100;
+  score = 0;
+
+  // Move to spawn
+  const obj = controls.getObject();
+  obj.position.set(0, 1.7, 5);
+
+  // Protection
+  spawnProtectedTime = 2.0;
+  protectedBadge.style.display = 'inline-block';
+
+  setPaused(false);
+}
+
 // Main loop
 function loop() {
   const now = performance.now();
   const dt = Math.min(0.033, (now - lastTime) / 1000);
   lastTime = now;
 
-  if (document.pointerLockElement === renderer.domElement) {
+  if (!isPaused && document.pointerLockElement === renderer.domElement) {
     updateControls(dt);
   }
 
-  // World update with player position so enemies can act
-  world.update(dt, controls.getObject().position, (dmg) => onPlayerHit(dmg));
+  if (!isPaused) {
+    const playerPos = controls.getObject().position;
+    world.update(dt, playerPos, (dmg) => onPlayerHit(dmg), () => onEnemyShot(), spawnProtectedTime <= 0);
+    animateGun(now * 0.001, dt);
+  }
 
-  animateGun(now * 0.001, dt);
+  // Spawn protection timer
+  if (spawnProtectedTime > 0) {
+    spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
+    if (spawnProtectedTime === 0) protectedBadge.style.display = 'none';
+  }
 
   renderer.render(scene, camera);
 
-  // FPS
+  // FPS + HUD
   acc += dt; frames++;
   if (acc >= 0.25) {
     fps = Math.round(frames / acc);
