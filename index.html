@@ -20,29 +20,30 @@
       }
       .crosshair::before { width: 12px; height: 2px; left: 0; top: 5px; }
       .crosshair::after { width: 2px; height: 12px; left: 5px; top: 0; }
-      .overlay {
+      .overlay, .pause-overlay {
         position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(20,20,28,0.6), rgba(10,10,14,0.9));
       }
-      .start {
+      .start, .pause-menu {
         background: #1d1f2a; border: 1px solid #2e3040; padding: 22px 26px; border-radius: 12px; text-align: center;
-        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35); min-width: 320px;
       }
-      .start button {
+      .start button, .pause-menu button {
         margin-top: 14px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
       }
       .controls {
         margin-top: 8px; opacity: 0.85; font-size: 13px; line-height: 1.4;
       }
+      .field { margin-top: 12px; display: grid; gap: 6px; }
+      .row { display: flex; gap: 10px; align-items: center; justify-content: center; }
+      input[type="range"] { width: 180px; }
       #damageVignette {
         position: fixed; inset: 0; pointer-events: none;
         background: radial-gradient(ellipse at center, rgba(255,0,0,0.0), rgba(255,0,0,0.18));
         opacity: 0; transition: opacity 120ms ease-out;
       }
-      #topRight {
-        position: fixed; top: 12px; right: 12px; display: flex; gap: 8px; pointer-events: auto;
-      }
-      #muteBtn {
-        background: #1d1f2a; color: #eaeaea; border: 1px solid #2e3040; border-radius: 8px; padding: 8px 10px; cursor: pointer;
+      #protectedBadge {
+        position: fixed; top: 12px; right: 12px; background: rgba(88, 101, 242, 0.25); border: 1px solid #5865f2; color: #cfd3ff;
+        padding: 6px 10px; border-radius: 8px; font-size: 12px; display: none; pointer-events: none;
       }
       a { color: #9ecbff; }
     </style>
@@ -50,9 +51,7 @@
   <body>
     <div id="app"></div>
     <div class="hud" id="hud">Health: 100 | Score: 0 | Targets: 0 | Enemies: 0 | FPS: 0</div>
-    <div id="topRight">
-      <button id="muteBtn" title="M">Sound: On</button>
-    </div>
+    <div id="protectedBadge">Spawn protection</div>
     <div id="damageVignette"></div>
     <div class="crosshair"></div>
 
@@ -60,9 +59,33 @@
       <div class="start">
         <div style="font-size:18px; font-weight:700;">Web FPS Starter</div>
         <div class="controls">
-          WASD: Move • Mouse: Look • Click: Shoot • Space: Jump • Shift: Sprint • M: Mute
+          WASD: Move • Mouse: Look • Click: Shoot • Space: Jump • Shift: Sprint • P: Pause
+        </div>
+        <div class="field">
+          <label for="startVolume">Volume</label>
+          <div class="row">
+            <input id="startVolume" type="range" min="0" max="100" step="1" value="80" />
+            <span id="startVolumeVal">80%</span>
+          </div>
         </div>
         <button id="startBtn">Click to Play</button>
+      </div>
+    </div>
+
+    <div class="pause-overlay" id="pauseOverlay" style="display:none;">
+      <div class="pause-menu">
+        <div style="font-size:18px; font-weight:700;">Paused</div>
+        <div class="field">
+          <label for="pauseVolume">Volume</label>
+          <div class="row">
+            <input id="pauseVolume" type="range" min="0" max="100" step="1" value="80" />
+            <span id="pauseVolumeVal">80%</span>
+          </div>
+        </div>
+        <div class="row" style="margin-top: 10px; gap: 12px;">
+          <button id="resumeBtn">Resume (P)</button>
+          <button id="restartBtn" style="background:#ef4444;">Restart</button>
+        </div>
       </div>
     </div>
 
