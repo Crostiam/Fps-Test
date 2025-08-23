@@ -26,8 +26,7 @@ export class Sound {
 
   setVolume(vol01) {
     this.volume = Math.max(0, Math.min(1, vol01));
-    if (!this.master) return;
-    if (this.muted) return;
+    if (!this.master || this.muted) return;
     this.master.gain.cancelScheduledValues(this.ctx.currentTime);
     this.master.gain.linearRampToValueAtTime(this.volume, this.ctx.currentTime + 0.05);
   }
@@ -121,6 +120,15 @@ export class Sound {
     const t = this.ctx.currentTime;
     o.frequency.exponentialRampToValueAtTime(50, t + 0.08);
     o.stop(t + 0.09);
+  }
+
+  playPickup() {
+    if (!this.ctx || this.muted) return;
+    const env = this._env(0.25, 0.6);
+    const o = this._osc('triangle', 660, env);
+    const t = this.ctx.currentTime;
+    o.frequency.exponentialRampToValueAtTime(880, t + 0.12);
+    o.stop(t + 0.26);
   }
 
   startAmbient() {
