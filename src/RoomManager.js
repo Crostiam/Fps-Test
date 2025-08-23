@@ -13,13 +13,14 @@ export class RoomManager {
     this.world.scene.add(this.groupsRoot);
 
     // Pedestals (interactable rewards)
-    this.pedestals = []; // { mesh, kind, roomId, opened }
+    this.pedestals = []; // { mesh:Group, kind, roomId, opened }
 
     // Minimap
     this.minimap = document.getElementById('minimap');
     this.visited = new Set();
     this.revealed = new Set();
 
+    // UI
     this.rewardOverlay = document.getElementById('rewardOverlay');
     this.rewardCards = document.getElementById('rewardCards');
     this.skipRewardBtn = document.getElementById('skipRewardBtn');
@@ -31,7 +32,12 @@ export class RoomManager {
     this.ROOM_SPACING = 40;
 
     this.locked = false;
+
+    // Optional teleport callback (provided by main)
+    this.teleportCb = null;
   }
+
+  setTeleport(cb) { this.teleportCb = cb; }
 
   generateNewFloor(floor = 1) {
     this._disposeRooms();
@@ -62,6 +68,17 @@ export class RoomManager {
   update(dt) {
     if (!this.currentRoom) return;
 
+    // Spin/bob pedestal gems so you can see them easily
+    for (const p of this.pedestals) {
+      const gem = p.mesh.children.find(c => c.name === 'pedestal_gem');
+      if (gem) {
+        gem.userData = gem.userData || {};
+        gem.userData.spin = (gem.userData.spin || 0) + dt * 2;
+        gem.rotation.y = gem.userData.spin;
+        gem.position.y = 1.0 + Math.sin(gem.userData.spin * 2) * 0.06;
+      }
+    }
+
     // Check room clear if locked
     if (this.locked) {
       let remaining = 0;
@@ -74,12 +91,22 @@ export class RoomManager {
         this._unlockDoors(this.currentRoom);
 
         if (this.currentRoom.type === 'combat') {
-          // Spawn a pedestal reward instead of overlay for reliability
           this._spawnRewardPedestal(this.currentRoom);
         } else if (this.currentRoom.type === 'boss') {
-          const pos = this._roomWorldCenter(this.currentRoom);
-          pos.y = 0.1;
-          this.world.spawnPortal(pos);
+          // Boss clear: move portal to Start room and teleport player there
+          const start = this.rooms.find(r => r.type === 'start') || this.currentRoom;
+          const startCenter = this._roomWorldCenter(start);
+          startCenter.y = 0.1;
+          this.world.clearPortals();
+          this.world.spawnPortal(startCenter);
+          // Teleport player to start room (just inside center)
+          if (this.teleportCb) {
+            const dest = startCenter.clone(); dest.y = (this.world.playerHeight || 1.7);
+            this.teleportCb(dest);
+          }
+          // Make sure Start room is visible/active
+          this._setCurrentRoom(start);
+          this._markVisited(start);
         }
       }
     }
@@ -120,8 +147,9 @@ export class RoomManager {
   // Pedestals (crate workaround)
   getPedestalHint(playerPos) {
     const p = this._nearestPedestalWithin(playerPos, 2.0);
-    if (!p) return '';
-    return p.opened ? '' : 'Press E to open';
+    if (!p || p.opened) return '';
+    const label = this.world._powerupLabel ? this.world._powerupLabel(p.kind) : 'Reward';
+    return `Press E to pick up: ${label}`;
   }
   tryOpenPedestal(playerPos, interactPressed) {
     if (!interactPressed) return false;
@@ -130,7 +158,6 @@ export class RoomManager {
     p.opened = true;
     // Apply directly and remove pedestal
     this.applyPickup(p.kind);
-    // FX remove
     this._removePedestal(p);
     return true;
   }
@@ -141,7 +168,7 @@ export class RoomManager {
     // Remove gate/shields from obstacles
     for (const r of this.rooms) {
       for (const dir of ['N','S','W','E']) {
-        const d = r.doors[dir];
+        const d = r.doors?.[dir];
         if (d && d.blocker) {
           const idx = this.world.obstacles.indexOf(d.blocker);
           if (idx >= 0) this.world.obstacles.splice(idx, 1);
@@ -277,10 +304,9 @@ export class RoomManager {
   }
 
   _buildDoorSet(node, dir, group, wallH) {
-    const half = this.ROOM_SIZE / 2;
     const gap = this.DOOR_W;
 
-    // Gate: solid blocker shown when room is locked
+    // Gate: solid blocker (visible only while locked)
     const gateW = (dir === 'N' || dir === 'S') ? gap : this.WALL_T;
     const gateD = (dir === 'N' || dir === 'S') ? this.WALL_T : gap;
     const gatePos = this._doorLocalOffset(dir).setY(wallH/2);
@@ -289,7 +315,7 @@ export class RoomManager {
     gate.position.copy(gatePos); gate.name = 'room_gate'; gate.visible = false;
     group.add(gate);
 
-    // Shield: always present see-through barrier requiring E to pass, blocks bullets
+    // Shield: always present see-through barrier that blocks walk/bullets until E
     const shieldW = (dir === 'N' || dir === 'S') ? gap : this.WALL_T;
     const shieldD = (dir === 'N' || dir === 'S') ? this.WALL_T : gap;
     const shieldPos = this._doorLocalOffset(dir).setY(wallH/2);
@@ -307,7 +333,6 @@ export class RoomManager {
   }
 
   _setCurrentRoom(room) {
-    // Toggle visibility
     for (const r of this.rooms) r.group.visible = (r === room);
     this.currentRoom = room;
     this._renderMinimap();
@@ -363,23 +388,26 @@ export class RoomManager {
   }
 
   _spawnPedestal(room, kind, worldPos) {
-    // Visual: simple pedestal + floating gem
+    // Build as a group at worldPos so distance checks work
+    const group = new THREE.Group();
+    group.position.copy(worldPos);
+    group.userData = { type: 'pedestal', kind, roomId: room.id, opened: false };
+    group.name = 'pedestal_group';
+
     const baseMat = new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.9, metalness: 0.1 });
     const base = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 0.5, 12), baseMat);
-    base.position.set(worldPos.x, 0.25, worldPos.z);
+    base.position.set(0, 0.25, 0);
     base.name = 'pedestal_base';
 
     const gemMat = new THREE.MeshStandardMaterial({ color: 0x93c5fd, emissive: 0x3b82f6, emissiveIntensity: 0.5, roughness: 0.4, metalness: 0.3 });
     const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), gemMat);
-    gem.position.set(worldPos.x, 1.0, worldPos.z);
+    gem.position.set(0, 1.0, 0);
     gem.name = 'pedestal_gem';
 
-    const group = new THREE.Group();
     group.add(base); group.add(gem);
-    group.userData = { type: 'pedestal', kind, roomId: room.id, opened: false, spin: Math.random()*Math.PI*2 };
     this.world.scene.add(group);
 
-    // Add a tiny collision ring to obstacles so shots don’t pass through pedestal
+    // Add base as an obstacle so shots don't pass through
     base.userData.aabb = new THREE.Box3().setFromObject(base);
     base.userData.static = true;
     this.world.obstacles.push(base);
@@ -389,7 +417,6 @@ export class RoomManager {
 
   _removePedestal(p) {
     try {
-      // Remove base from obstacles
       const base = p.mesh.children.find(c=>c.name==='pedestal_base');
       if (base) {
         const idx = this.world.obstacles.indexOf(base);
@@ -420,7 +447,6 @@ export class RoomManager {
         d.blocker.userData.static = true;
         if (!this.world.obstacles.includes(d.blocker)) this.world.obstacles.push(d.blocker);
       }
-      // Shields always remain to block walk/bullets until E; we keep them visible permanently
     }
   }
   _unlockDoors(room) {
@@ -431,7 +457,6 @@ export class RoomManager {
         const idx = this.world.obstacles.indexOf(d.blocker);
         if (idx >= 0) this.world.obstacles.splice(idx, 1);
       }
-      // Shields remain; you must Press E to pass
     }
   }
 
@@ -477,14 +502,13 @@ export class RoomManager {
     const spanY = Math.max(1, maxY - minY + 1);
     const cellW = Math.min(24, Math.min(w/spanX, h/spanY));
 
-    // Helper to map grid to canvas
     const toXY = (rx, ry) => {
       const cx = pad + (rx - minX + 0.5)*cellW;
       const cy = pad + (ry - minY + 0.5)*cellW;
       return { x: cx, y: cy };
     };
 
-    // Draw links
+    // Links
     ctx.lineWidth = 2;
     for (const r of this.rooms) {
       const a = toXY(r.x, r.y);
@@ -497,7 +521,7 @@ export class RoomManager {
       }
     }
 
-    // Draw nodes
+    // Nodes
     for (const r of this.rooms) {
       const p = toXY(r.x, r.y);
       const isVisited = this.visited.has(r.id);
@@ -506,13 +530,9 @@ export class RoomManager {
 
       ctx.beginPath();
       ctx.arc(p.x, p.y, cellW*0.3, 0, Math.PI*2);
-      if (r === this.currentRoom) {
-        ctx.fillStyle = '#38bdf8';
-      } else if (isVisited) {
-        ctx.fillStyle = '#94a3b8';
-      } else {
-        ctx.fillStyle = '#334155';
-      }
+      if (r === this.currentRoom) { ctx.fillStyle = '#38bdf8'; }
+      else if (isVisited) { ctx.fillStyle = '#94a3b8'; }
+      else { ctx.fillStyle = '#334155'; }
       ctx.fill();
 
       // Type marker
