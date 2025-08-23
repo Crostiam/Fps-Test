@@ -7,10 +7,6 @@
       content="width=device-width, initial-scale=1, maximum-scale=1"
     />
     <title>Web FPS Roguelike</title>
-    <link
-      rel="icon"
-      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%235865f2%22/></svg>"
-    />
     <style>
       html, body, #app { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0e0e12; color: #eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
       .hud {
@@ -27,6 +23,8 @@
       }
       .crosshair::before { width: 12px; height: 2px; left: 0; top: 5px; }
       .crosshair::after { width: 2px; height: 12px; left: 5px; top: 0; }
+
+      /* Overlays */
       .overlay, .pause-overlay, .death-overlay, .home-overlay {
         position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(20,20,28,0.6), rgba(10,10,14,0.9));
       }
@@ -35,7 +33,6 @@
         box-shadow: 0 10px 30px rgba(0,0,0,0.35);
       }
       .panel h1 { margin: 0 0 6px 0; font-size: 20px; }
-      .panel h2 { margin: 10px 0 6px 0; font-size: 16px; opacity: 0.9; }
       .btn {
         margin-top: 12px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
       }
@@ -49,6 +46,7 @@
       .shop .item p { margin: 0 0 6px 0; font-size: 13px; opacity: 0.9; }
       .shop .item .meta { font-size: 12px; opacity: 0.8; }
       .stats { font-size: 14px; opacity: 0.9; }
+
       #damageVignette {
         position: fixed; inset: 0; pointer-events: none;
         background: radial-gradient(ellipse at center, rgba(255,0,0,0.0), rgba(255,0,0,0.18));
@@ -58,34 +56,61 @@
         position: fixed; top: 12px; right: 12px; background: rgba(88, 101, 242, 0.25); border: 1px solid #5865f2; color: #cfd3ff;
         padding: 6px 10px; border-radius: 8px; font-size: 12px; display: none; pointer-events: none;
       }
-      .hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: 0.9; background: rgba(0,0,0,0.5); padding: 6px 8px; border-radius: 8px; }
-      #toast {
-        position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%); background: rgba(17, 24, 39, 0.95);
-        border: 1px solid #334155; padding: 8px 12px; border-radius: 10px; font-size: 13px; display: none;
+      .hint { position: fixed; bottom: 64px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: 0.95; background: rgba(0,0,0,0.5); padding: 6px 10px; border-radius: 6px; display: none; }
+
+      /* Weapons bar */
+      #weaponsBar {
+        position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 10px; background: rgba(0,0,0,0.35); border: 1px solid #2e3040; border-radius: 10px; padding: 6px 10px;
+        backdrop-filter: blur(4px);
       }
+      .wslot {
+        min-width: 140px; padding: 6px 10px; border-radius: 8px; border: 1px solid transparent; background: rgba(0,0,0,0.25);
+        display: grid; gap: 2px; text-align: left;
+      }
+      .wslot.active { border-color: #5865f2; background: rgba(88,101,242,0.15); }
+      .wname { font-weight: 700; font-size: 13px; }
+      .wammo { font-size: 12px; opacity: 0.9; }
+      .wlocked { opacity: 0.5; }
+
+      /* Home screen */
+      .home-overlay .panel { min-width: 720px; }
     </style>
   </head>
   <body>
     <div id="app"></div>
+
     <div class="hud" id="hud">Depth: 1 | Gold: 0 | Health: 100 | Weapon: Pistol | FPS: 0</div>
     <div id="protectedBadge">Spawn protection</div>
     <div id="damageVignette"></div>
     <div class="crosshair"></div>
-    <div class="hint" id="hint" style="display:none;">Press E to interact</div>
-    <div id="toast"></div>
+    <div class="hint" id="hint">Press E to interact</div>
+
+    <!-- Weapons bar -->
+    <div id="weaponsBar">
+      <div class="wslot" id="slotPistol">
+        <div class="wname">[1] Pistol</div>
+        <div class="wammo" id="ammoPistol">Ammo: ∞</div>
+      </div>
+      <div class="wslot wlocked" id="slotRifle">
+        <div class="wname">[2] Rifle</div>
+        <div class="wammo" id="ammoRifle">0 / 0</div>
+      </div>
+      <div class="wslot wlocked" id="slotShotgun">
+        <div class="wname">[3] Shotgun</div>
+        <div class="wammo" id="ammoShotgun">0 / 0</div>
+      </div>
+    </div>
 
     <!-- Home Screen with Upgrades -->
     <div class="home-overlay" id="home">
-      <div class="panel" style="min-width: 720px;">
+      <div class="panel">
         <h1>Web FPS Roguelike</h1>
         <div class="stats" id="homeStats">Wallet Gold: 0</div>
         <div class="grid" style="margin-top:10px;">
           <div class="shop" id="shop"></div>
           <div class="row">
             <button class="btn" id="startRunBtn">Start Run</button>
-          </div>
-          <div style="font-size:12px; opacity:0.85; margin-top:6px;">
-            Controls: WASD Move • Mouse Look • Click Shoot • Space Jump • Shift Sprint • 1/2/3 Switch Weapons • E Interact • P or ESC Pause
           </div>
         </div>
       </div>
