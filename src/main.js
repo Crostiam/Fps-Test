@@ -2,11 +2,14 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls.js';
 import { Input } from './Input.js';
 import { World } from './World.js';
+import { Sound } from './Sound.js';
 
 const app = document.getElementById('app');
 const hud = document.getElementById('hud');
 const overlay = document.getElementById('overlay');
 const startBtn = document.getElementById('startBtn');
+const damageVignette = document.getElementById('damageVignette');
+const muteBtn = document.getElementById('muteBtn');
 
 // Renderer
 const renderer = new THREE.WebGLRenderer({
@@ -14,14 +17,18 @@ const renderer = new THREE.WebGLRenderer({
   powerPreference: 'high-performance',
   alpha: false,
 });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+renderer.physicallyCorrectLights = true;
 app.appendChild(renderer.domElement);
 
 // Scene + Camera
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0e0e12);
+scene.fog = new THREE.FogExp2(0x0e0e12, 0.012);
 
 const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 500);
 camera.position.set(0, 1.7, 5);
@@ -36,6 +43,9 @@ const input = new Input();
 // World
 const world = new World(scene);
 
+// Sound
+const sound = new Sound();
+
 // Raycasters
 const shootRay = new THREE.Raycaster();
 shootRay.far = 100;
@@ -45,13 +55,14 @@ const groundRay = new THREE.Raycaster();
 // Player state
 const player = {
   velocity: new THREE.Vector3(0, 0, 0),
-  speed: 6.0,
+  speed: 6.2,
   sprintMult: 1.6,
   gravity: 20.0,
   jumpSpeed: 7.0,
   onGround: false,
   radius: 0.6,
-  height: 1.7 // eye height
+  height: 1.7, // eye height
+  health: 100,
 };
 
 // Score/FPS
@@ -61,18 +72,29 @@ let acc = 0;
 let frames = 0;
 let fps = 0;
 
-// Simple gun attached to camera
+// Gun: improved model with recoil and sway
 const gun = new THREE.Group();
+let recoilT = 0;
 {
-  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x303642, metalness: 0.2, roughness: 0.6 });
-  const accentMat = new THREE.MeshStandardMaterial({ color: 0x5865f2, emissive: 0x1a1f6a, emissiveIntensity: 0.25, metalness: 0.3, roughness: 0.3 });
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 1.0), bodyMat);
-  body.position.set(0, 0, 0.3);
-  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.5), accentMat);
-  barrel.position.set(0.17, 0, 0.85);
-  gun.add(body, barrel);
+  const matBody = new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.4, roughness: 0.3 });
+  const matAcc  = new THREE.MeshStandardMaterial({ color: 0x8892f6, emissive: 0x3038c2, emissiveIntensity: 0.35, metalness: 0.7, roughness: 0.2 });
+
+  const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.28, 0.9), matBody);
+  receiver.position.set(0.02, 0.02, 0.35);
+
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.6, 12), matAcc);
+  barrel.rotation.z = Math.PI / 2;
+  barrel.position.set(0.33, 0.03, 0.65);
+
+  const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.22, 0.4), matBody);
+  handguard.position.set(0.14, -0.02, 0.75);
+
+  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.12), matAcc);
+  sight.position.set(0.02, 0.14, 0.1);
+
+  gun.add(receiver, barrel, handguard, sight);
   gun.position.set(0.35, -0.35, -0.6); // relative to camera
-  gun.rotation.set(-0.05, 0.25, 0.0);
+  gun.rotation.set(-0.06, 0.25, 0.0);
   camera.add(gun);
   scene.add(camera);
 }
@@ -83,14 +105,27 @@ const muzzle = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0xffe066 })
 );
 muzzle.visible = false;
-muzzle.position.set(0.17, -0.35, -0.05);
+muzzle.position.set(0.45, -0.32, 0.05);
 camera.add(muzzle);
 
 // UI start
 startBtn.addEventListener('click', () => {
   renderer.domElement.requestPointerLock();
   overlay.style.display = 'none';
+  sound.init();
+  sound.resume();
+  sound.startAmbient();
 });
+
+muteBtn.addEventListener('click', toggleMute);
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM') toggleMute();
+});
+function toggleMute() {
+  if (!sound.ctx) sound.init();
+  sound.setMuted(!sound.muted);
+  muteBtn.textContent = `Sound: ${sound.muted ? 'Off' : 'On'}`;
+}
 
 // Shooting
 window.addEventListener('mousedown', (e) => {
@@ -105,9 +140,12 @@ function getShootables() {
 function shoot() {
   shootRay.setFromCamera({ x: 0, y: 0 }, camera);
   const intersects = shootRay.intersectObjects(getShootables(), true);
-  // Muzzle flash
+
+  // Muzzle flash and sound + recoil
   muzzle.visible = true;
   setTimeout(() => (muzzle.visible = false), 50);
+  sound.playShot();
+  recoilT = 0.12;
 
   if (intersects.length > 0) {
     const result = world.handleHit(intersects[0]);
@@ -126,6 +164,8 @@ function flashHit() {
 const moveDir = new THREE.Vector3();
 const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
+
+let stepTimer = 0;
 
 function updateControls(dt) {
   // Camera basis
@@ -167,9 +207,8 @@ function updateControls(dt) {
   groundRay.near = 0;
   groundRay.far = player.height + 0.5;
 
-  // Only collide with floor-like geometry
   const groundHits = groundRay.intersectObjects(scene.children, true)
-    .filter(h => h.object.name === 'floor' || h.object.name === 'obstacle' || h.object.name === 'house')
+    .filter(h => h.object.name === 'floor' || h.object.name === 'obstacle' || h.object.name === 'house_wall' || h.object.name === 'arena_wall' || h.object.name === 'rock')
     .sort((a, b) => a.distance - b.distance);
 
   const hit = groundHits[0];
@@ -185,15 +224,39 @@ function updateControls(dt) {
   // Horizontal collisions
   world.resolveCollisions(nextPos, player.radius, player.height);
 
+  // Footsteps
+  const horizSpeed = Math.hypot(player.velocity.x, player.velocity.z);
+  stepTimer -= dt;
+  if (player.onGround && horizSpeed > 2.0 && stepTimer <= 0) {
+    sound.playStep();
+    stepTimer = 0.42 / Math.min(3, horizSpeed); // faster when sprinting
+  }
+
   obj.position.copy(nextPos);
 }
 
+function onPlayerHit(dmg) {
+  player.health = Math.max(0, player.health - dmg);
+  // Damage feedback
+  damageVignette.style.opacity = '1';
+  setTimeout(() => damageVignette.style.opacity = '0', 120);
+  sound.playHit();
+}
+
 function animateGun(t, dt) {
-  // Minimal sway/bob
-  const sway = Math.sin(t * 6.0) * 0.004 * Math.min(1, player.velocity.length() / 6);
-  const bob = Math.cos(t * 12.0) * 0.002 * Math.min(1, player.velocity.length() / 6);
+  // Sway/bob
+  const v = Math.min(1, Math.hypot(player.velocity.x, player.velocity.z) / 6);
+  const sway = Math.sin(t * 6.0) * 0.004 * v;
+  const bob = Math.cos(t * 12.0) * 0.002 * v;
+
+  // Recoil
+  if (recoilT > 0) recoilT = Math.max(0, recoilT - dt);
+  const r = recoilT > 0 ? (recoilT / 0.12) : 0;
+  const kick = r * 0.06;
+
   gun.position.x = 0.35 + sway;
-  gun.position.y = -0.35 + bob;
+  gun.position.y = -0.35 + bob - kick*0.5;
+  gun.rotation.x = -0.06 - kick;
 }
 
 function resize() {
@@ -214,8 +277,8 @@ function loop() {
     updateControls(dt);
   }
 
-  // World update with player position so enemies can chase you
-  world.update(dt, controls.getObject().position);
+  // World update with player position so enemies can act
+  world.update(dt, controls.getObject().position, (dmg) => onPlayerHit(dmg));
 
   animateGun(now * 0.001, dt);
 
@@ -229,7 +292,7 @@ function loop() {
   }
   const targetsLeft = world.targets.length;
   const enemiesLeft = world.enemies.length;
-  hud.textContent = `Score: ${score} | Targets: ${targetsLeft} | Enemies: ${enemiesLeft} | FPS: ${fps}`;
+  hud.textContent = `Health: ${player.health} | Score: ${score} | Targets: ${targetsLeft} | Enemies: ${enemiesLeft} | FPS: ${fps}`;
 
   requestAnimationFrame(loop);
 }
@@ -237,4 +300,4 @@ resize();
 requestAnimationFrame(loop);
 
 // Defaults for perf
-renderer.shadowMap.enabled = false
+renderer.shadowMap.enabled = false;
