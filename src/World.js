@@ -11,8 +11,9 @@ function segmentPointDistance(a, b, p, outClosest = null) {
   const abLen2 = Math.max(1e-8, ab.lengthSq());
   let t = ap.dot(ab) / abLen2;
   t = clamp01(t);
-  if (outClosest) outClosest.copy(a).addScaledVector(ab, t);
-  return tmpVecB.copy(a).addScaledVector(ab, t).sub(p).length();
+  const closest = tmpVecB.copy(a).addScaledVector(ab, t);
+  if (outClosest) outClosest.copy(closest);
+  return closest.sub(p).length();
 }
 
 export class World {
@@ -41,7 +42,7 @@ export class World {
     // Data
     this.targets = [];
     this.enemies = [];
-    this.obstacles = [];
+    this.obstacles = []; // blocks movement & bullets
     this.projectiles = [];
     this.houses = [];
     this.noSpawnVolumes = [];
@@ -82,6 +83,7 @@ export class World {
     this._spawnRandomBossForFloor();
   }
 
+  // Scene setup
   _setupLights() {
     const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x202028, 0.55);
     const dir = new THREE.DirectionalLight(0xffffff, 0.7);
@@ -172,11 +174,14 @@ export class World {
       group.add(m); this.obstacles.push(m);
     };
     const half = size/2, gateW = 4, sideW = (size - gateW) / 2;
+    // North wall split with gate
     addWall(sideW, height, wallT, -(gateW/2 + sideW/2), height/2, -half + wallT/2);
     addWall(sideW, height, wallT,  (gateW/2 + sideW/2), height/2, -half + wallT/2);
+    // Other walls
     addWall(size, height, wallT, 0, height/2,  half - wallT/2);
     addWall(wallT, height, size, -half + wallT/2, height/2, 0);
     addWall(wallT, height, size,  half - wallT/2, height/2, 0);
+    // Towers
     const towerR = 2.2, towerH = 8, towerGeo = new THREE.CylinderGeometry(towerR, towerR, towerH, 12);
     const towerPos = [
       [-half + towerR + wallT, towerH/2, -half + towerR + wallT],
@@ -186,8 +191,7 @@ export class World {
     ];
     for (const [x,y,z] of towerPos) {
       const t = new THREE.Mesh(towerGeo, towerMat);
-      t.position.set(x,y,z);
-      t.name = 'castle_tower';
+      t.position.set(x,y,z); t.name = 'castle_tower';
       t.userData.aabb = new THREE.Box3().setFromObject(t);
       t.userData.static = true;
       group.add(t); this.obstacles.push(t);
@@ -206,20 +210,38 @@ export class World {
     const base = new THREE.Mesh(new THREE.BoxGeometry(size, 2, size), mat);
     base.position.set(0, 1, 0); base.name = 'pyramid_base';
     group.add(base); base.userData.aabb = new THREE.Box3().setFromObject(base); base.userData.static = true; this.obstacles.push(base);
+
+    // Sloped sides approximated with thin walls; leave an entrance (gate) on north side
     const sideT = 0.8, half = size/2;
     const sideMat = new THREE.MeshStandardMaterial({ color: 0xa3844d, roughness: 0.95, metalness: 0.02 });
     const sideW = size, sideH = height, sideD = sideT;
-    const sides = [
-      [0, height/2 + 2, -half + sideT/2, 0],
-      [0, height/2 + 2,  half - sideT/2, 0],
-      [-half + sideT/2, height/2 + 2, 0, Math.PI/2],
-      [ half - sideT/2, height/2 + 2, 0, Math.PI/2],
-    ];
-    for (const [x,y,z,ry] of sides) {
-      const s = new THREE.Mesh(new THREE.BoxGeometry(sideW, sideH, sideD), sideMat);
-      s.position.set(x,y,z); s.rotation.y = ry || 0; s.name='pyramid_wall';
-      group.add(s); s.userData.aabb = new THREE.Box3().setFromObject(s); s.userData.static = true; this.obstacles.push(s);
-    }
+
+    // North side split gate
+    const gateW = 5;
+    const sideWHalf = (sideW - gateW) / 2;
+    const northLeft = new THREE.Mesh(new THREE.BoxGeometry(sideWHalf, sideH, sideD), sideMat);
+    northLeft.position.set(-(gateW/2 + sideWHalf/2), height/2 + 2, -half + sideT/2);
+    northLeft.name='pyramid_wall'; group.add(northLeft);
+    northLeft.userData.aabb = new THREE.Box3().setFromObject(northLeft); northLeft.userData.static = true; this.obstacles.push(northLeft);
+
+    const northRight = new THREE.Mesh(new THREE.BoxGeometry(sideWHalf, sideH, sideD), sideMat);
+    northRight.position.set( (gateW/2 + sideWHalf/2), height/2 + 2, -half + sideT/2);
+    northRight.name='pyramid_wall'; group.add(northRight);
+    northRight.userData.aabb = new THREE.Box3().setFromObject(northRight); northRight.userData.static = true; this.obstacles.push(northRight);
+
+    // South, West, East full
+    const south = new THREE.Mesh(new THREE.BoxGeometry(sideW, sideH, sideD), sideMat);
+    south.position.set(0, height/2 + 2,  half - sideT/2); south.name='pyramid_wall';
+    group.add(south); south.userData.aabb = new THREE.Box3().setFromObject(south); south.userData.static = true; this.obstacles.push(south);
+
+    const west = new THREE.Mesh(new THREE.BoxGeometry(sideD, sideH, sideW), sideMat);
+    west.position.set(-half + sideT/2, height/2 + 2, 0); west.name='pyramid_wall';
+    group.add(west); west.userData.aabb = new THREE.Box3().setFromObject(west); west.userData.static = true; this.obstacles.push(west);
+
+    const east = new THREE.Mesh(new THREE.BoxGeometry(sideD, sideH, sideW), sideMat);
+    east.position.set( half - sideT/2, height/2 + 2, 0); east.name='pyramid_wall';
+    group.add(east); east.userData.aabb = new THREE.Box3().setFromObject(east); east.userData.static = true; this.obstacles.push(east);
+
     this.lairGroup.add(group);
     const inner = new THREE.Box3(
       new THREE.Vector3(cx - half + sideT, 0, cz - half + sideT),
@@ -232,15 +254,34 @@ export class World {
     const group = new THREE.Group(); group.position.set(cx, 0, cz);
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x3b4a6b, roughness: 0.95, metalness: 0.04 });
     const half = size/2, t = 0.8;
-    const addWall = (w,h,d,x,y,z) => {
-      const wMesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
-      wMesh.position.set(x,y,z); wMesh.name='ice_wall';
-      group.add(wMesh); wMesh.userData.aabb = new THREE.Box3().setFromObject(wMesh); wMesh.userData.static = true; this.obstacles.push(wMesh);
-    };
-    addWall(size, height, t, 0, height/2, -half + t/2);
-    addWall(size, height, t, 0, height/2,  half - t/2);
-    addWall(t, height, size, -half + t/2, height/2, 0);
-    addWall(t, height, size,  half - t/2, height/2, 0);
+
+    // North wall split gate
+    const gateW = 5;
+    const sideW = (size - gateW) / 2;
+    const northL = new THREE.Mesh(new THREE.BoxGeometry(sideW, height, t), wallMat);
+    northL.position.set(-(gateW/2 + sideW/2), height/2, -half + t/2);
+    northL.name='ice_wall'; group.add(northL);
+    northL.userData.aabb = new THREE.Box3().setFromObject(northL); northL.userData.static = true; this.obstacles.push(northL);
+
+    const northR = new THREE.Mesh(new THREE.BoxGeometry(sideW, height, t), wallMat);
+    northR.position.set((gateW/2 + sideW/2), height/2, -half + t/2);
+    northR.name='ice_wall'; group.add(northR);
+    northR.userData.aabb = new THREE.Box3().setFromObject(northR); northR.userData.static = true; this.obstacles.push(northR);
+
+    // Other walls
+    const south = new THREE.Mesh(new THREE.BoxGeometry(size, height, t), wallMat);
+    south.position.set(0, height/2,  half - t/2); south.name='ice_wall';
+    group.add(south); south.userData.aabb = new THREE.Box3().setFromObject(south); south.userData.static = true; this.obstacles.push(south);
+
+    const west = new THREE.Mesh(new THREE.BoxGeometry(t, height, size), wallMat);
+    west.position.set(-half + t/2, height/2, 0); west.name='ice_wall';
+    group.add(west); west.userData.aabb = new THREE.Box3().setFromObject(west); west.userData.static = true; this.obstacles.push(west);
+
+    const east = new THREE.Mesh(new THREE.BoxGeometry(t, height, size), wallMat);
+    east.position.set( half - t/2, height/2, 0); east.name='ice_wall';
+    group.add(east); east.userData.aabb = new THREE.Box3().setFromObject(east); east.userData.static = true; this.obstacles.push(east);
+
+    // Crystals
     const crystalMat = new THREE.MeshStandardMaterial({ color: 0x7dd3fc, emissive: 0x1e3a8a, emissiveIntensity: 0.3, metalness: 0.2, roughness: 0.6 });
     for (let i=0;i<6;i++){
       const r = 0.6 + Math.random()*1.2;
@@ -342,6 +383,7 @@ export class World {
     }
   }
 
+  // Spawners
   spawnTargets(count = 10) {
     const geo = new THREE.SphereGeometry(0.7, 12, 12);
     for (let i = 0; i < count; i++) {
@@ -368,14 +410,13 @@ export class World {
   spawnEnemies({ melee = 4, ranged = 2 } = {}) {
     const healthScale = this.difficulty;
     const speedScale = 1 + (this.floor - 1) * 0.05;
+
     const spawnOne = (kind) => {
       const h = 2.0;
       const geo = new THREE.BoxGeometry(1, h, 1);
-      const mat = new THREE.MeshStandardMaterial({
-        color: kind === 'ranged' ? 0x9b59b6 : 0xd9534f,
-        metalness: 0.1,
-        roughness: 0.7
-      });
+      let color = 0xd9534f;
+      if (kind === 'ranged') color = 0x9b59b6;
+      const mat = new THREE.MeshStandardMaterial({ color, metalness: 0.1, roughness: 0.7 });
       const e = new THREE.Mesh(geo, mat);
       const pos = this._randAway(200);
       e.position.set(pos.x, h*0.5, pos.z);
@@ -387,35 +428,51 @@ export class World {
         radius: 0.5,
         height: h,
         shootCooldown: 0,
+        touchCd: 0,
         phase: Math.random() * Math.PI * 2
       };
       this.enemyGroup.add(e);
       this.enemies.push(e);
     };
+
     for (let i = 0; i < melee; i++) spawnOne('melee');
     for (let i = 0; i < ranged; i++) spawnOne('ranged');
   }
 
   spawnPowerups(n = 8) {
-    const kinds = ['health', 'shield', 'damage', 'firerate', 'weapon_rifle', 'weapon_shotgun'];
+    const kinds = ['health', 'shield', 'damage', 'firerate', 'weapon_rifle', 'weapon_shotgun', 'ammo_rifle', 'ammo_shotgun'];
     for (let i = 0; i < n; i++) {
       const kind = kinds[i % kinds.length];
       const mesh = this._makePowerupMesh(kind);
       const pos = this._randAway(200);
       mesh.position.set(pos.x, 0.6, pos.z);
-      mesh.userData = { type: 'powerup', kind, spin: Math.random()*Math.PI*2 };
+      mesh.userData = { type: 'powerup', kind, spin: Math.random()*Math.PI*2, label: this._powerupLabel(kind) };
       this.powerupGroup.add(mesh);
     }
   }
   _makePowerupMesh(kind) {
     const color = {
       health: 0x4ade80, shield: 0x60a5fa, damage: 0xf59e0b, firerate: 0xf472b6,
-      weapon_rifle: 0x9ca3af, weapon_shotgun: 0xef4444
+      weapon_rifle: 0x9ca3af, weapon_shotgun: 0xef4444, ammo_rifle: 0x93c5fd, ammo_shotgun: 0xfda4af
     }[kind] || 0xffffff;
     const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.5, metalness: 0.3 });
     return new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), mat);
   }
+  _powerupLabel(kind) {
+    const map = {
+      health: '+25 Health',
+      shield: 'Temporary Shield',
+      damage: 'Damage Boost',
+      firerate: 'Fire-Rate Boost',
+      weapon_rifle: 'Unlock Rifle',
+      weapon_shotgun: 'Unlock Shotgun',
+      ammo_rifle: 'Rifle Ammo',
+      ammo_shotgun: 'Shotgun Ammo'
+    };
+    return map[kind] || 'Powerup';
+  }
 
+  // Boss
   _spawnRandomBossForFloor() {
     const options = ['castle', 'pyramid', 'ice'];
     const pick = options[Math.floor(Math.random()*options.length)];
@@ -461,6 +518,7 @@ export class World {
     this.activeBossKind = kind;
   }
 
+  // Projectiles
   spawnProjectile(from, dir, speed, owner = 'player', ttl = 2.0, damage = 1) {
     const pos = from.clone();
     const vel = dir.clone().normalize().multiplyScalar(speed);
@@ -474,12 +532,14 @@ export class World {
     this.projectiles.push({ pos, vel, ttl, radius, owner, damage, mesh });
   }
 
+  // Gold
   spawnGold(point, amount = 1) {
     const geo = new THREE.IcosahedronGeometry(0.15, 0);
     const mat = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xca8a04, emissiveIntensity: 0.35, metalness: 0.6, roughness: 0.3 });
     const m = new THREE.Mesh(geo, mat);
-    m.position.copy(point); m.position.y = Math.max(m.position.y, 0.5);
-    m.userData = { type: 'gold', amount, ttl: 12, spin: Math.random()*Math.PI*2 };
+    m.position.copy(point);
+    m.position.y = Math.max(m.position.y, 1.2);
+    m.userData = { type: 'gold', amount, ttl: 15, spin: Math.random()*Math.PI*2, vy: 2.0 }; // falls down
     this.goldGroup.add(m);
   }
 
@@ -494,6 +554,28 @@ export class World {
     this.portals.push(ring);
   }
 
+  // Nearby powerup for interaction
+  getNearestPowerup(playerPos, radius = 1.6) {
+    let best = null, bestD = radius;
+    for (const p of this.powerupGroup.children) {
+      const d = p.position.distanceTo(playerPos);
+      if (d < bestD) { best = p; bestD = d; }
+    }
+    return best;
+  }
+  removePowerup(p) {
+    if (!p) return null;
+    const kind = p.userData && p.userData.kind ? p.userData.kind : 'unknown';
+    if (p.geometry && p.geometry.dispose) p.geometry.dispose();
+    if (p.material) {
+      if (Array.isArray(p.material)) p.material.forEach(m=>m && m.dispose && m.dispose());
+      else if (p.material.dispose) p.material.dispose();
+    }
+    this.powerupGroup.remove(p);
+    return kind;
+  }
+
+  // Update loop
   update(dt, playerPos = null, onPlayerHit = null, onEnemyShot = null, playerVulnerable = true) {
     // Animate powerups/gold/portal
     for (const p of this.powerupGroup.children) {
@@ -506,12 +588,15 @@ export class World {
       g.userData.ttl -= dt;
       g.userData.spin += dt*4;
       g.rotation.y = g.userData.spin;
+      // Fall down with simple gravity until y ~ 0.5
+      if (g.position.y > 0.5) {
+        g.userData.vy -= 9.8 * dt;
+        g.position.y += g.userData.vy * dt;
+        if (g.position.y <= 0.5) { g.position.y = 0.5; g.userData.vy = 0; }
+      }
       if (g.userData.ttl <= 0) {
         if (g.geometry && g.geometry.dispose) g.geometry.dispose();
-        if (g.material) {
-          if (Array.isArray(g.material)) g.material.forEach(m => m && m.dispose && m.dispose());
-          else if (g.material.dispose) g.material.dispose();
-        }
+        if (g.material) { if (Array.isArray(g.material)) g.material.forEach(m=>m && m.dispose && m.dispose()); else if (g.material.dispose) g.material.dispose(); }
         this.goldGroup.remove(g);
       }
     }
@@ -526,7 +611,7 @@ export class World {
       t.position.y = t.userData.baseY + Math.sin(t.userData.bobPhase += dt * 2.0) * 0.25;
     }
 
-    // Enemies (incl. bosses)
+    // Enemies (movement + contact damage)
     if (playerPos) {
       for (const e of this.enemies) {
         const isBoss = e.userData.type === 'boss';
@@ -537,6 +622,14 @@ export class World {
         if (!isBoss) {
           if (kind === 'melee') {
             e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
+            // Contact damage
+            e.userData.touchCd = Math.max(0, e.userData.touchCd - dt);
+            if (onPlayerHit && playerVulnerable) {
+              if (dist < 1.2 && e.userData.touchCd <= 0) {
+                onPlayerHit(Math.round(8 * this.difficulty));
+                e.userData.touchCd = 0.6;
+              }
+            }
           } else {
             const min = 12, max = 24;
             if (dist < min) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
@@ -546,6 +639,7 @@ export class World {
               const s = Math.sin(performance.now()*0.001 + e.userData.phase) * 0.6;
               e.position.addScaledVector(perp, s * dt * e.userData.speed);
             }
+            // Shoot at intervals (LOS check)
             e.userData.shootCooldown -= dt;
             if (playerVulnerable && e.userData.shootCooldown <= 0 && onEnemyShot) {
               const from = e.position.clone().setY(e.position.y + 0.8);
@@ -558,10 +652,13 @@ export class World {
                 this.spawnProjectile(from, dir, 42, 'enemy', 2.0, dmg);
                 onEnemyShot();
                 e.userData.shootCooldown = 1.1 + Math.random()*0.6;
-              } else e.userData.shootCooldown = 0.3 + Math.random()*0.4;
+              } else {
+                e.userData.shootCooldown = 0.3 + Math.random()*0.4;
+              }
             }
           }
         } else {
+          // Boss behaviors
           const patt = e.userData.pattern;
           const min = (patt === 'spread') ? 14 : (patt === 'rings') ? 16 : 18;
           const max = (patt === 'spread') ? 26 : (patt === 'rings') ? 28 : 32;
@@ -604,49 +701,73 @@ export class World {
           }
         }
 
+        // Resolve collisions vs world
         const nextPos = e.position.clone();
         this.resolveCollisions(nextPos, e.userData.radius, e.userData.height);
         e.position.copy(nextPos);
       }
     }
 
-    // Projectiles
-    for (let i = this.projectiles.length - 1; i >= 0; i--) {
-      const p = this.projectiles[i];
-      const start = p.pos.clone();
-      const delta = tmpVec3.copy(p.vel).multiplyScalar(dt);
-      const end = start.clone().add(delta);
-      this.ray.set(start, delta.clone().normalize());
-      this.ray.far = delta.length() + 0.001;
+    // Projectiles: movement + collisions (including player)
+    if (playerPos) {
+      for (let i = this.projectiles.length - 1; i >= 0; i--) {
+        const p = this.projectiles[i];
+        const start = p.pos.clone();
+        const delta = tmpVec3.copy(p.vel).multiplyScalar(dt);
+        const end = start.clone().add(delta);
+        this.ray.set(start, delta.clone().normalize());
+        this.ray.far = delta.length() + 0.001;
 
-      let hit = null;
-      if (p.owner === 'player') {
-        const colliders = [...this.obstacles, ...this.enemyGroup.children, ...this.targetGroup.children];
-        const hits = this.ray.intersectObjects(colliders, true);
-        hit = hits[0] || null;
-        if (hit) {
-          this._spawnTracer(start, hit.point, 0xffe066, 0.06);
-          const kind = hit.object.userData?.type;
-          if (kind === 'enemy' || kind === 'target' || kind === 'boss') {
-            this.handleHit(hit, p.damage);
+        let hit = null;
+        if (p.owner === 'player') {
+          const colliders = [...this.obstacles, ...this.enemyGroup.children, ...this.targetGroup.children];
+          const hits = this.ray.intersectObjects(colliders, true);
+          hit = hits[0] || null;
+          if (hit) {
+            this._spawnTracer(start, hit.point, 0xffe066, 0.06);
+            const kind = hit.object.userData && hit.object.userData.type ? hit.object.userData.type : null;
+            if (kind === 'enemy' || kind === 'target' || kind === 'boss') {
+              this.handleHit(hit, p.damage);
+            }
+            this._removeProjectileAt(i);
+            continue;
           }
-          this._removeProjectileAt(i);
-          continue;
-        }
-      } else {
-        const hits = this.ray.intersectObjects(this.obstacles, true);
-        hit = hits[0] || null;
-        if (hit) {
-          this._spawnTracer(start, hit.point, 0xbf5fff, 0.06);
-          this._removeProjectileAt(i);
-          continue;
-        }
-      }
+        } else {
+          // Enemy projectile: check obstacle
+          const hits = this.ray.intersectObjects(this.obstacles, true);
+          hit = hits[0] || null;
+          let blockedDist = hit ? hit.distance : Infinity;
 
-      p.pos.copy(end);
-      p.mesh.position.copy(p.pos);
-      p.ttl -= dt;
-      if (p.ttl <= 0) { this._removeProjectileAt(i); continue; }
+          // Check player capsule segment distance
+          const closest = tmpVecA;
+          const d = segmentPointDistance(start, end, playerPos, closest);
+          const playerRadius = 0.45;
+          if (d <= playerRadius) {
+            const distSeg = start.distanceTo(closest);
+            const blocked = distSeg > blockedDist - 0.001;
+            if (!blocked && onPlayerHit && playerVulnerable) {
+              onPlayerHit(p.damage);
+              this._spawnTracer(start, closest.clone(), 0xbf5fff, 0.06);
+              this._removeProjectileAt(i);
+              continue;
+            }
+          }
+
+          if (hit) {
+            this._spawnTracer(start, hit.point, 0xbf5fff, 0.06);
+            this._removeProjectileAt(i);
+            continue;
+          }
+        }
+
+        // Advance
+        p.pos.copy(end);
+        p.mesh.position.copy(p.pos);
+
+        // Lifetime
+        p.ttl -= dt;
+        if (p.ttl <= 0) { this._removeProjectileAt(i); continue; }
+      }
     }
 
     // FX fade
@@ -685,24 +806,24 @@ export class World {
 
   handleHit(intersection, damage = 1) {
     const obj = intersection.object;
-    if (obj.userData?.type === 'target') {
+    const type = obj.userData && obj.userData.type ? obj.userData.type : null;
+
+    if (type === 'target') {
       obj.userData.health -= damage;
       this.spawnGold(intersection.point, 1);
       if (obj.userData.health <= 0) {
         this.targetGroup.remove(obj);
         this.targets = this.targets.filter(t => t !== obj);
         if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose());
-          else if (obj.material.dispose) obj.material.dispose();
-        }
+        if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose()); else if (obj.material.dispose) obj.material.dispose(); }
         this.spawnTargets(1);
         for (let i=0;i<2;i++) this.spawnGold(intersection.point.clone().add(new THREE.Vector3((Math.random()-0.5)*0.6, 0, (Math.random()-0.5)*0.6)), 1);
         return { removed: true, kind: 'target', score: 1 };
       }
       return { removed: false, kind: 'target', score: 0 };
     }
-    if (obj.userData?.type === 'enemy') {
+
+    if (type === 'enemy') {
       obj.userData.health -= damage;
       const mat = obj.material; if (mat && mat.color) {
         const oldColor = mat.color.clone();
@@ -713,16 +834,14 @@ export class World {
         this.enemyGroup.remove(obj);
         this.enemies = this.enemies.filter(e => e !== obj);
         if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose());
-          else if (obj.material.dispose) obj.material.dispose();
-        }
+        if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose()); else if (obj.material.dispose) obj.material.dispose(); }
         this.spawnEnemies({ melee: obj.userData.kind === 'melee' ? 1 : 0, ranged: obj.userData.kind === 'ranged' ? 1 : 0 });
         return { removed: true, kind: 'enemy', score: 3 };
       }
       return { removed: false, kind: 'enemy', score: 0 };
     }
-    if (obj.userData?.type === 'boss') {
+
+    if (type === 'boss') {
       obj.userData.health -= damage;
       const mat = obj.material;
       if (mat) {
@@ -737,15 +856,13 @@ export class World {
         this.enemyGroup.remove(obj);
         this.enemies = this.enemies.filter(e => e !== obj);
         if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
-        if (obj.material) {
-          if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose());
-          else if (obj.material.dispose) obj.material.dispose();
-        }
+        if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose()); else if (obj.material.dispose) obj.material.dispose(); }
         this.activeBoss = null; this.activeBossKind = null;
         return { removed: true, kind: 'boss', score: 20 };
       }
       return { removed: false, kind: 'boss', score: 0 };
     }
+
     return { removed: false, kind: 'unknown', score: 0 };
   }
 
@@ -767,29 +884,15 @@ export class World {
     }
   }
 
+  // Interactions
   checkPlayerPickups(playerPos, onPowerup, onGold) {
-    for (let i = this.powerupGroup.children.length - 1; i >= 0; i--) {
-      const p = this.powerupGroup.children[i];
-      if (p.position.distanceTo(playerPos) < 1.3) {
-        const kind = p.userData.kind;
-        if (p.geometry && p.geometry.dispose) p.geometry.dispose();
-        if (p.material) {
-          if (Array.isArray(p.material)) p.material.forEach(m=>m && m.dispose && m.dispose());
-          else if (p.material.dispose) p.material.dispose();
-        }
-        this.powerupGroup.remove(p);
-        onPowerup(kind);
-      }
-    }
+    // Only gold auto-pick; powerups require E (handled in main)
     for (let i = this.goldGroup.children.length - 1; i >= 0; i--) {
       const g = this.goldGroup.children[i];
       if (g.position.distanceTo(playerPos) < 1.2) {
         const amt = g.userData.amount || 1;
         if (g.geometry && g.geometry.dispose) g.geometry.dispose();
-        if (g.material) {
-          if (Array.isArray(g.material)) g.material.forEach(m=>m && m.dispose && m.dispose());
-          else if (g.material.dispose) g.material.dispose();
-        }
+        if (g.material) { if (Array.isArray(g.material)) g.material.forEach(m=>m && m.dispose && m.dispose()); else if (g.material.dispose) g.material.dispose(); }
         this.goldGroup.remove(g);
         onGold(amt);
       }
@@ -807,43 +910,32 @@ export class World {
     for (let i=this.portalGroup.children.length-1;i>=0;i--){
       const r = this.portalGroup.children[i];
       if (r.geometry && r.geometry.dispose) r.geometry.dispose();
-      if (r.material) {
-        if (Array.isArray(r.material)) r.material.forEach(m=>m && m.dispose && m.dispose());
-        else if (r.material.dispose) r.material.dispose();
-      }
+      if (r.material) { if (Array.isArray(r.material)) r.material.forEach(m=>m && m.dispose && m.dispose()); else if (r.material.dispose) r.material.dispose(); }
       this.portalGroup.remove(r);
     }
     this.portals.length = 0;
   }
 
+  // Reset dynamic content
   resetDynamic(removePortals = true) {
     for (const t of this.targets) {
       this.targetGroup.remove(t);
       if (t.geometry && t.geometry.dispose) t.geometry.dispose();
-      if (t.material) {
-        if (Array.isArray(t.material)) t.material.forEach(m=>m && m.dispose && m.dispose());
-        else if (t.material.dispose) t.material.dispose();
-      }
+      if (t.material) { if (Array.isArray(t.material)) t.material.forEach(m=>m && m.dispose && m.dispose()); else if (t.material.dispose) t.material.dispose(); }
     }
     this.targets.length = 0;
 
     for (const e of this.enemies) {
       this.enemyGroup.remove(e);
       if (e.geometry && e.geometry.dispose) e.geometry.dispose();
-      if (e.material) {
-        if (Array.isArray(e.material)) e.material.forEach(m=>m && m.dispose && m.dispose());
-        else if (e.material.dispose) e.material.dispose();
-      }
+      if (e.material) { if (Array.isArray(e.material)) e.material.forEach(m=>m && m.dispose && m.dispose()); else if (e.material.dispose) e.material.dispose(); }
     }
     this.enemies.length = 0; this.activeBoss = null; this.activeBossKind = null;
 
     for (const p of this.projectiles) {
       if (p.mesh) {
         if (p.mesh.geometry && p.mesh.geometry.dispose) p.mesh.geometry.dispose();
-        if (p.mesh.material) {
-          if (Array.isArray(p.mesh.material)) p.mesh.material.forEach(m=>m && m.dispose && m.dispose());
-          else if (p.mesh.material.dispose) p.mesh.material.dispose();
-        }
+        if (p.mesh.material) { if (Array.isArray(p.mesh.material)) p.mesh.material.forEach(m=>m && m.dispose && m.dispose()); else if (p.mesh.material.dispose) p.mesh.material.dispose(); }
         this.projectileGroup.remove(p.mesh);
       }
     }
@@ -859,20 +951,14 @@ export class World {
     for (let i = this.powerupGroup.children.length - 1; i >= 0; i--) {
       const p = this.powerupGroup.children[i];
       if (p.geometry && p.geometry.dispose) p.geometry.dispose();
-      if (p.material) {
-        if (Array.isArray(p.material)) p.material.forEach(m=>m && m.dispose && m.dispose());
-        else if (p.material.dispose) p.material.dispose();
-      }
+      if (p.material) { if (Array.isArray(p.material)) p.material.forEach(m=>m && m.dispose && m.dispose()); else if (p.material.dispose) p.material.dispose(); }
       this.powerupGroup.remove(p);
     }
 
     for (let i = this.goldGroup.children.length - 1; i >= 0; i--) {
       const g = this.goldGroup.children[i];
       if (g.geometry && g.geometry.dispose) g.geometry.dispose();
-      if (g.material) {
-        if (Array.isArray(g.material)) g.material.forEach(m=>m && m.dispose && m.dispose());
-        else if (g.material.dispose) g.material.dispose();
-      }
+      if (g.material) { if (Array.isArray(g.material)) g.material.forEach(m=>m && m.dispose && m.dispose()); else if (g.material.dispose) g.material.dispose(); }
       this.goldGroup.remove(g);
     }
 
