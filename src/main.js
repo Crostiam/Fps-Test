@@ -54,9 +54,6 @@ const world = new World(scene);
 const sound = new Sound();
 
 // Raycasters
-const shootRay = new THREE.Raycaster();
-shootRay.far = 100;
-
 const groundRay = new THREE.Raycaster();
 
 // Player state
@@ -80,27 +77,55 @@ let acc = 0;
 let frames = 0;
 let fps = 0;
 
-// Gun: improved simple model with recoil and sway
+// Weapons
+const weapons = {
+  pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0, damage: 6 },
+  rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5 },
+  shotgun:{ name: 'Shotgun',fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7, damage: 3 },
+};
+let unlockedWeapons = new Set(['pistol']);
+let currentWeaponKey = 'pistol';
+let nextFireTime = 0;
+
+// Modifiers from powerups
+const mods = {
+  damageMult: 1.0,
+  fireRateMult: 1.0,
+  shieldTime: 0,
+};
+const modTimers = {
+  damageMult: 0,
+  fireRateMult: 0,
+};
+
+// Gun model with a slightly better look
 const gun = new THREE.Group();
 let recoilT = 0;
 {
-  const matBody = new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.4, roughness: 0.3 });
-  const matAcc  = new THREE.MeshStandardMaterial({ color: 0x8892f6, emissive: 0x3038c2, emissiveIntensity: 0.35, metalness: 0.7, roughness: 0.2 });
+  const matBody = new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.55, roughness: 0.25 });
+  const matAcc  = new THREE.MeshStandardMaterial({ color: 0x9aa2ff, emissive: 0x343cff, emissiveIntensity: 0.35, metalness: 0.8, roughness: 0.2 });
 
-  const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.28, 0.9), matBody);
-  receiver.position.set(0.02, 0.02, 0.35);
+  const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.3, 1.0), matBody);
+  receiver.position.set(0, 0.02, 0.35);
 
-  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.6, 12), matAcc);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.7, 16), matAcc);
   barrel.rotation.z = Math.PI / 2;
-  barrel.position.set(0.33, 0.03, 0.65);
+  barrel.position.set(0.33, 0.03, 0.7);
 
-  const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.22, 0.4), matBody);
-  handguard.position.set(0.14, -0.02, 0.75);
+  const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.24, 0.45), matBody);
+  handguard.position.set(0.16, -0.02, 0.78);
 
-  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.06, 0.12), matAcc);
-  sight.position.set(0.02, 0.14, 0.1);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.3, 0.14), matBody);
+  grip.position.set(-0.05, -0.18, 0.2);
+  grip.rotation.x = -0.45;
 
-  gun.add(receiver, barrel, handguard, sight);
+  const stock = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.22, 0.22), matBody);
+  stock.position.set(-0.35, -0.02, 0.1);
+
+  const sight = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.06, 0.12), matAcc);
+  sight.position.set(0.03, 0.16, 0.08);
+
+  gun.add(receiver, barrel, handguard, grip, stock, sight);
   gun.position.set(0.35, -0.35, -0.6); // relative to camera
   gun.rotation.set(-0.06, 0.25, 0.0);
   camera.add(gun);
@@ -138,6 +163,10 @@ startBtn.addEventListener('click', () => {
   overlay.style.display = 'none';
   spawnProtectedTime = 2.0;
   protectedBadge.style.display = 'inline-block';
+
+  // Spawn inside a house for cover
+  const spawn = world.getSpawnPointInsideHouse();
+  controls.getObject().position.copy(spawn);
 });
 
 // Pause/resume
@@ -154,26 +183,61 @@ function setPaused(p) {
 resumeBtn.addEventListener('click', () => setPaused(false));
 restartBtn.addEventListener('click', restartGame);
 
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyP') {
-    setPaused(!isPaused);
+// Pointer lock changes (ESC exits pointer lock). Make it show pause menu so game remains accessible.
+document.addEventListener('pointerlockchange', () => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  if (!locked && overlay.style.display === 'none' && !isPaused) {
+    setPaused(true);
   }
 });
 
-// Shooting (projectile-based)
+// Also toggle pause with ESC/P
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyP' || e.code === 'Escape') {
+    setPaused(!isPaused);
+  }
+  // weapon switching
+  if (e.code === 'Digit1') currentWeaponKey = unlockedWeapons.has('pistol') ? 'pistol' : currentWeaponKey;
+  if (e.code === 'Digit2') currentWeaponKey = unlockedWeapons.has('rifle') ? 'rifle' : currentWeaponKey;
+  if (e.code === 'Digit3') currentWeaponKey = unlockedWeapons.has('shotgun') ? 'shotgun' : currentWeaponKey;
+});
+
+// Shooting (projectile-based with fire-rate cap)
 window.addEventListener('mousedown', (e) => {
   if (isPaused) return;
   if (document.pointerLockElement !== renderer.domElement) return;
-  if (e.button === 0) shoot();
+  if (e.button === 0) tryShoot();
 });
 
-function shoot() {
-  // Spawn a projectile from camera forward
-  const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+function tryShoot() {
+  const now = performance.now() / 1000;
+  const def = weapons[currentWeaponKey];
+  const fireRate = def.fireRate * mods.fireRateMult;
+  if (now < nextFireTime) return;
+  nextFireTime = now + 1 / Math.max(0.01, fireRate);
+  shootWeapon(def);
+}
+
+function shootWeapon(def) {
+  const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).normalize();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  // Spawn from in front of camera
   const origin = camera.position.clone();
-  // Lift slightly to simulate barrel
-  const start = origin.clone().add(dir.clone().multiplyScalar(0.2));
-  world.spawnProjectile(start, dir, 65, 'player', 2.0);
+  const start = origin.clone().add(forward.clone().multiplyScalar(0.2));
+
+  // Pellets with spread
+  for (let i = 0; i < def.pellets; i++) {
+    const yaw = (Math.random() - 0.5) * def.spreadDeg;
+    const pitch = (Math.random() - 0.5) * def.spreadDeg;
+    const dir = forward.clone()
+      .add(right.clone().multiplyScalar(Math.tan((yaw * Math.PI)/180)))
+      .add(up.clone().multiplyScalar(Math.tan((pitch * Math.PI)/180)))
+      .normalize();
+    const damage = Math.round(def.damage * mods.damageMult);
+    world.spawnProjectile(start, dir, def.projSpeed, 'player', 2.0, damage);
+  }
 
   // Muzzle flash and sound + recoil
   muzzle.visible = true;
@@ -191,22 +255,22 @@ function flashHit() {
 
 // Movement
 const moveDir = new THREE.Vector3();
-const forward = new THREE.Vector3();
+const fwd = new THREE.Vector3();
 const right = new THREE.Vector3();
 
 let stepTimer = 0;
 
 function updateControls(dt) {
   // Camera basis
-  forward.set(0,0,-1).applyQuaternion(camera.quaternion);
+  fwd.set(0,0,-1).applyQuaternion(camera.quaternion);
   right.set(1,0,0).applyQuaternion(camera.quaternion);
-  forward.y = 0; right.y = 0;
-  forward.normalize(); right.normalize();
+  fwd.y = 0; right.y = 0;
+  fwd.normalize(); right.normalize();
 
   // Input to movement vector
   moveDir.set(0,0,0);
-  if (input.forward) moveDir.add(forward);
-  if (input.back) moveDir.sub(forward);
+  if (input.forward) moveDir.add(fwd);
+  if (input.back) moveDir.sub(fwd);
   if (input.right) moveDir.add(right);
   if (input.left) moveDir.sub(right);
 
@@ -237,7 +301,7 @@ function updateControls(dt) {
   groundRay.far = player.height + 0.5;
 
   const groundHits = groundRay.intersectObjects(scene.children, true)
-    .filter(h => h.object.name === 'floor' || h.object.name === 'obstacle' || h.object.name === 'house_wall' || h.object.name === 'arena_wall' || h.object.name === 'rock')
+    .filter(h => h.object.name === 'floor' || h.object.name === 'obstacle' || h.object.name === 'house_wall' || h.object.name === 'arena_wall' || h.object.name === 'rock' || h.object.name === 'castle_wall' || h.object.name === 'castle_tower')
     .sort((a, b) => a.distance - b.distance);
 
   const hit = groundHits[0];
@@ -265,9 +329,8 @@ function updateControls(dt) {
 }
 
 function onPlayerHit(dmg) {
-  if (spawnProtectedTime > 0) return;
+  if (spawnProtectedTime > 0 || mods.shieldTime > 0) return;
   player.health = Math.max(0, player.health - dmg);
-  // Damage feedback
   damageVignette.style.opacity = '1';
   setTimeout(() => damageVignette.style.opacity = '0', 120);
   if (!sound.ctx) sound.init();
@@ -304,30 +367,65 @@ function resize() {
 window.addEventListener('resize', resize);
 
 function restartGame() {
-  // Reset world dynamics
   world.resetDynamic();
-
-  // Reset player
   player.velocity.set(0, 0, 0);
   player.health = 100;
   score = 0;
 
-  // Move to spawn
-  const obj = controls.getObject();
-  obj.position.set(0, 1.7, 5);
+  // Reset weapons and mods
+  unlockedWeapons = new Set(['pistol']);
+  currentWeaponKey = 'pistol';
+  mods.damageMult = 1.0;
+  mods.fireRateMult = 1.0;
+  mods.shieldTime = 0;
+  modTimers.damageMult = 0;
+  modTimers.fireRateMult = 0;
 
-  // Protection
+  // Spawn inside a house again
+  const spawn = world.getSpawnPointInsideHouse();
+  controls.getObject().position.copy(spawn);
+
   spawnProtectedTime = 2.0;
   protectedBadge.style.display = 'inline-block';
 
   setPaused(false);
 }
 
+function applyPickup(kind) {
+  if (!sound.ctx) sound.init();
+  sound.playPickup();
+
+  switch (kind) {
+    case 'health':
+      player.health = Math.min(100, player.health + 25);
+      break;
+    case 'shield':
+      mods.shieldTime = Math.max(mods.shieldTime, 6.0);
+      break;
+    case 'damage':
+      mods.damageMult = 1.6;
+      modTimers.damageMult = 12.0;
+      break;
+    case 'firerate':
+      mods.fireRateMult = 1.6;
+      modTimers.fireRateMult = 12.0;
+      break;
+    case 'weapon_rifle':
+      unlockedWeapons.add('rifle');
+      currentWeaponKey = 'rifle';
+      break;
+    case 'weapon_shotgun':
+      unlockedWeapons.add('shotgun');
+      currentWeaponKey = 'shotgun';
+      break;
+  }
+}
+
 // Main loop
 function loop() {
-  const now = performance.now();
-  const dt = Math.min(0.033, (now - lastTime) / 1000);
-  lastTime = now;
+  const nowMs = performance.now();
+  const dt = Math.min(0.033, (nowMs - lastTime) / 1000);
+  lastTime = nowMs;
 
   if (!isPaused && document.pointerLockElement === renderer.domElement) {
     updateControls(dt);
@@ -335,14 +433,30 @@ function loop() {
 
   if (!isPaused) {
     const playerPos = controls.getObject().position;
-    world.update(dt, playerPos, (dmg) => onPlayerHit(dmg), () => onEnemyShot(), spawnProtectedTime <= 0);
-    animateGun(now * 0.001, dt);
-  }
+    world.update(dt, playerPos, (dmg) => onPlayerHit(dmg), () => onEnemyShot(), spawnProtectedTime <= 0 && mods.shieldTime <= 0);
+    animateGun(nowMs * 0.001, dt);
 
-  // Spawn protection timer
-  if (spawnProtectedTime > 0) {
-    spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
-    if (spawnProtectedTime === 0) protectedBadge.style.display = 'none';
+    // Spawn protection/shield timers
+    if (spawnProtectedTime > 0) {
+      spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
+      if (spawnProtectedTime === 0) protectedBadge.style.display = 'none';
+    }
+    if (mods.shieldTime > 0) {
+      mods.shieldTime = Math.max(0, mods.shieldTime - dt);
+    }
+
+    // Mod timers
+    if (modTimers.damageMult > 0) {
+      modTimers.damageMult = Math.max(0, modTimers.damageMult - dt);
+      if (modTimers.damageMult === 0) mods.damageMult = 1.0;
+    }
+    if (modTimers.fireRateMult > 0) {
+      modTimers.fireRateMult = Math.max(0, modTimers.fireRateMult - dt);
+      if (modTimers.fireRateMult === 0) mods.fireRateMult = 1.0;
+    }
+
+    // Powerup pickups
+    world.checkPlayerPickups(playerPos, applyPickup);
   }
 
   renderer.render(scene, camera);
@@ -355,7 +469,9 @@ function loop() {
   }
   const targetsLeft = world.targets.length;
   const enemiesLeft = world.enemies.length;
-  hud.textContent = `Health: ${player.health} | Score: ${score} | Targets: ${targetsLeft} | Enemies: ${enemiesLeft} | FPS: ${fps}`;
+  const wname = weapons[currentWeaponKey].name;
+  const shieldStr = mods.shieldTime > 0 ? ` | Shield: ${mods.shieldTime.toFixed(0)}s` : '';
+  hud.textContent = `Weapon: ${wname} | Health: ${player.health} | Score: ${score} | Targets: ${targetsLeft} | Enemies: ${enemiesLeft} | FPS: ${fps}${shieldStr}`;
 
   requestAnimationFrame(loop);
 }
