@@ -4,6 +4,17 @@ const tmpVec3 = new THREE.Vector3();
 const tmpVecA = new THREE.Vector3();
 const tmpVecB = new THREE.Vector3();
 
+function clamp01(x){ return Math.max(0, Math.min(1, x)); }
+function segmentPointDistance(a, b, p, outClosest = null) {
+  const ab = tmpVecA.copy(b).sub(a);
+  const ap = tmpVecB.copy(p).sub(a);
+  const abLen2 = Math.max(1e-8, ab.lengthSq());
+  let t = ap.dot(ab) / abLen2;
+  t = clamp01(t);
+  if (outClosest) outClosest.copy(a).addScaledVector(ab, t);
+  return tmpVecB.copy(a).addScaledVector(ab, t).sub(p).length();
+}
+
 export class World {
   constructor(scene) {
     this.scene = scene;
@@ -11,14 +22,15 @@ export class World {
     this.targets = [];
     this.enemies = [];
     this.obstacles = []; // anything that blocks movement and bullets
-    this.fxGroup = new THREE.Group();
 
+    this.fxGroup = new THREE.Group();
+    this.projectileGroup = new THREE.Group();
     this.targetGroup = new THREE.Group();
     this.enemyGroup = new THREE.Group();
     this.wallGroup = new THREE.Group();
     this.rockGroup = new THREE.Group();
     this.houseGroup = new THREE.Group();
-    this.scene.add(this.targetGroup, this.enemyGroup, this.wallGroup, this.rockGroup, this.houseGroup, this.fxGroup);
+    this.scene.add(this.targetGroup, this.enemyGroup, this.wallGroup, this.rockGroup, this.houseGroup, this.projectileGroup, this.fxGroup);
 
     this._setupLights();
     this._setupFloor();
@@ -31,10 +43,11 @@ export class World {
     this.spawnEnemies({ melee: 4, ranged: 3 });
 
     this.ray = new THREE.Raycaster();
+    this.projectiles = []; // {pos, vel, ttl, radius, owner:'player'|'enemy', mesh}
   }
 
   _setupLights() {
-    const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x202028, 0.5);
+    const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x202028, 0.55);
     const dir = new THREE.DirectionalLight(0xffffff, 0.7);
     dir.position.set(10, 14, 6);
     this.scene.add(hemi, dir);
@@ -94,7 +107,6 @@ export class World {
   }
 
   _setupHouses() {
-    // Enterable houses: 4 walls (with a door gap), optional roof (no collision)
     const makeHouse = (cx, cz, size = 10, height = 3.2, doorWidth = 2.2, wallT = 0.3, rotY = 0) => {
       const group = new THREE.Group();
       group.position.set(cx, 0, cz);
@@ -103,9 +115,7 @@ export class World {
       const wallMat = new THREE.MeshStandardMaterial({ color: 0x373d4a, roughness: 0.85, metalness: 0.05 });
       const roofMat = new THREE.MeshStandardMaterial({ color: 0x2b303b, roughness: 0.9, metalness: 0.02 });
 
-      // Front wall split for doorway
       const half = size/2;
-      const segZ = -half + wallT/2;
       const segY = height/2;
 
       const makeWallSeg = (w, h, d, x, y, z) => {
@@ -118,8 +128,8 @@ export class World {
         this.obstacles.push(wMesh);
       };
 
-      // Front wall split left and right of door
-      const frontZ = segZ;
+      // Front wall split for doorway
+      const frontZ = -half + wallT/2;
       const sideW = (size - doorWidth) / 2;
       makeWallSeg(sideW, height, wallT, - (doorWidth/2 + sideW/2), segY, frontZ);
       makeWallSeg(sideW, height, wallT,   (doorWidth/2 + sideW/2), segY, frontZ);
@@ -128,9 +138,8 @@ export class World {
       makeWallSeg(size, height, wallT, 0, segY, half - wallT/2);
 
       // Left/right walls
-      const sideZ = 0;
-      makeWallSeg(wallT, height, size, -half + wallT/2, segY, sideZ);
-      makeWallSeg(wallT, height, size,  half - wallT/2, segY, sideZ);
+      makeWallSeg(wallT, height, size, -half + wallT/2, segY, 0);
+      makeWallSeg(wallT, height, size,  half - wallT/2, segY, 0);
 
       // Roof (visual only)
       const roof = new THREE.Mesh(new THREE.BoxGeometry(size, wallT, size), roofMat);
@@ -156,7 +165,6 @@ export class World {
         roughness: 0.95, metalness: 0.02
       });
       const rock = new THREE.Mesh(geo, mat);
-      // Position rocks away from immediate center
       const radius = 15 + Math.random() * 85;
       const angle = Math.random() * Math.PI * 2;
       rock.position.set(Math.cos(angle) * radius, r * 0.5, Math.sin(angle) * radius);
@@ -197,7 +205,7 @@ export class World {
 
   spawnEnemies({ melee = 4, ranged = 2 } = {}) {
     const spawnOne = (kind) => {
-      const h = kind === 'ranged' ? 2.0 : 2.0;
+      const h = 2.0;
       const geo = new THREE.BoxGeometry(1, h, 1);
       const mat = new THREE.MeshStandardMaterial({
         color: kind === 'ranged' ? 0x9b59b6 : 0xd9534f,
@@ -213,11 +221,12 @@ export class World {
       enemy.userData = {
         type: 'enemy',
         kind,
-        health: kind === 'ranged' ? 3 : 3,
+        health: 3,
         speed: kind === 'ranged' ? 2.3 + Math.random() * 0.9 : 2.8 + Math.random() * 1.2,
         radius: 0.5,
         height: h,
-        shootCooldown: 0
+        shootCooldown: 0,
+        phase: Math.random() * Math.PI * 2
       };
       this.enemyGroup.add(enemy);
       this.enemies.push(enemy);
@@ -227,7 +236,31 @@ export class World {
     for (let i = 0; i < ranged; i++) spawnOne('ranged');
   }
 
-  update(dt, playerPos = null, onPlayerHit = null) {
+  spawnProjectile(from, dir, speed, owner = 'player', ttl = 2.0) {
+    const pos = from.clone();
+    const vel = dir.clone().normalize().multiplyScalar(speed);
+    const radius = owner === 'player' ? 0.06 : 0.06;
+
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(radius, 8, 8),
+      new THREE.MeshBasicMaterial({ color: owner === 'player' ? 0xffe066 : 0xbf5fff })
+    );
+    mesh.position.copy(pos);
+    this.projectileGroup.add(mesh);
+
+    this.projectiles.push({ pos, vel, ttl, radius, owner, mesh });
+  }
+
+  _spawnTracer(from, to, color = 0xffe066, ttl = 0.08) {
+    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 });
+    const line = new THREE.Line(geo, mat);
+    line.userData.ttl = ttl;
+    line.userData.maxTtl = ttl;
+    this.fxGroup.add(line);
+  }
+
+  update(dt, playerPos = null, onPlayerHit = null, onEnemyShot = null, playerVulnerable = true) {
     // Targets idle motion
     for (const t of this.targets) {
       t.rotation.y += t.userData.rotSpeed * dt;
@@ -242,43 +275,41 @@ export class World {
         tmpVecA.set(playerPos.x, e.position.y, playerPos.z).sub(e.position);
         tmpVecA.y = 0;
         const dist = tmpVecA.length();
-
         if (dist > 0.001) tmpVecA.normalize();
 
         if (kind === 'melee') {
-          // Chase
           e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
         } else {
           // Ranged: keep distance, light strafing
-          const ideal = 18;
-          const min = 12;
-          const max = 24;
-          if (dist < min) {
-            e.position.addScaledVector(tmpVecA, -e.userData.speed * dt); // back away
-          } else if (dist > max) {
-            e.position.addScaledVector(tmpVecA, e.userData.speed * dt); // approach
-          } else {
-            // strafe perpendicular
-            tmpVecB.set(-tmpVecA.z, 0, tmpVecA.x).multiplyScalar(Math.sin(performance.now()*0.001 + e.id || 0) * 0.6 * dt * e.userData.speed);
-            e.position.add(tmpVecB);
+          const min = 12, max = 24;
+          if (dist < min) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
+          else if (dist > max) e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
+          else {
+            // strafe perpendicular with stable phase
+            const perp = tmpVecB.set(-tmpVecA.z, 0, tmpVecA.x).normalize();
+            const s = Math.sin(performance.now()*0.001 + e.userData.phase) * 0.6;
+            e.position.addScaledVector(perp, s * dt * e.userData.speed);
           }
 
-          // Shooting
+          // Shooting as projectiles if player is vulnerable
           e.userData.shootCooldown -= dt;
-          if (e.userData.shootCooldown <= 0 && onPlayerHit) {
-            // Line of sight check
-            this.ray.set(e.position.clone().setY(e.position.y + 0.8), tmpVecA.clone().normalize());
+          if (playerVulnerable && e.userData.shootCooldown <= 0 && onEnemyShot) {
+            // LOS check to player
+            const from = e.position.clone().setY(e.position.y + 0.8);
+            const toPlayer = playerPos.clone();
+            const dir = toPlayer.clone().sub(from).normalize();
+            this.ray.set(from, dir);
             this.ray.far = 60;
             const hits = this.ray.intersectObjects(this.obstacles, true);
             const firstObstacle = hits[0];
-            const toPlayer = playerPos.clone().sub(e.position).length();
-            const clear = !firstObstacle || firstObstacle.distance > toPlayer;
+            const distToPlayer = from.distanceTo(toPlayer);
+            const clear = !firstObstacle || firstObstacle.distance > distToPlayer;
             if (clear) {
-              onPlayerHit(6); // damage
-              this._spawnTracer(e.position.clone().setY(e.position.y + 0.8), playerPos.clone().setY(playerPos.y - 0.2), 0xbf5fff);
+              this.spawnProjectile(from, dir, 42, 'enemy', 2.0);
+              onEnemyShot();
               e.userData.shootCooldown = 1.1 + Math.random()*0.6;
             } else {
-              e.userData.shootCooldown = 0.3 + Math.random()*0.4; // retry sooner if blocked
+              e.userData.shootCooldown = 0.3 + Math.random()*0.4;
             }
           }
         }
@@ -290,6 +321,80 @@ export class World {
         const nextPos = e.position.clone();
         this.resolveCollisions(nextPos, e.userData.radius, e.userData.height);
         e.position.copy(nextPos);
+      }
+    }
+
+    // Projectiles
+    for (let i = this.projectiles.length - 1; i >= 0; i--) {
+      const p = this.projectiles[i];
+      const start = p.pos.clone();
+      const delta = tmpVec3.copy(p.vel).multiplyScalar(dt);
+      const end = start.clone().add(delta);
+
+      // Raycast against obstacles and shootables depending on owner
+      this.ray.set(start, delta.clone().normalize());
+      this.ray.far = delta.length() + 0.001;
+
+      let hit = null;
+      if (p.owner === 'player') {
+        const colliders = [
+          ...this.obstacles,
+          ...this.enemyGroup.children,
+          ...this.targetGroup.children
+        ];
+        const hits = this.ray.intersectObjects(colliders, true);
+        hit = hits[0] || null;
+        if (hit) {
+          // Spawn tracer and handle impact
+          this._spawnTracer(start, hit.point, 0xffe066, 0.06);
+          // If enemy/target
+          const kind = hit.object.userData?.type;
+          if (kind === 'enemy' || kind === 'target') {
+            this.handleHit(hit);
+          }
+          // Remove projectile
+          this._removeProjectileAt(i);
+          continue;
+        }
+      } else {
+        // Enemy projectile: check obstacle first
+        const hits = this.ray.intersectObjects(this.obstacles, true);
+        hit = hits[0] || null;
+
+        // Check player capsule (eye pos approx) if no obstacle hit nearer than player
+        if (playerPos) {
+          const closest = tmpVecA;
+          const d = segmentPointDistance(start, end, playerPos, closest);
+          const playerRadius = 0.45;
+          if (d <= playerRadius) {
+            // Make sure no obstacle closer than the hit
+            const distSeg = start.distanceTo(closest);
+            const block = hit && hit.distance < distSeg - 0.001;
+            if (!block && onPlayerHit) {
+              onPlayerHit(6);
+              this._spawnTracer(start, closest.clone(), 0xbf5fff, 0.06);
+              this._removeProjectileAt(i);
+              continue;
+            }
+          }
+        }
+
+        if (hit) {
+          this._spawnTracer(start, hit.point, 0xbf5fff, 0.06);
+          this._removeProjectileAt(i);
+          continue;
+        }
+      }
+
+      // No hit: advance
+      p.pos.copy(end);
+      p.mesh.position.copy(p.pos);
+
+      // Lifetime
+      p.ttl -= dt;
+      if (p.ttl <= 0) {
+        this._removeProjectileAt(i);
+        continue;
       }
     }
 
@@ -307,13 +412,14 @@ export class World {
     }
   }
 
-  _spawnTracer(from, to, color = 0xffe066, ttl = 0.08) {
-    const geo = new THREE.BufferGeometry().setFromPoints([from, to]);
-    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 1 });
-    const line = new THREE.Line(geo, mat);
-    line.userData.ttl = ttl;
-    line.userData.maxTtl = ttl;
-    this.fxGroup.add(line);
+  _removeProjectileAt(i) {
+    const p = this.projectiles[i];
+    if (p.mesh) {
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      this.projectileGroup.remove(p.mesh);
+    }
+    this.projectiles.splice(i, 1);
   }
 
   handleHit(intersection) {
@@ -348,7 +454,7 @@ export class World {
         obj.geometry.dispose();
         if (Array.isArray(obj.material)) obj.material.forEach(m => m.dispose());
         else obj.material.dispose();
-        // respawn an enemy of the same type
+        // respawn same type
         this.spawnEnemies({ melee: obj.userData.kind === 'melee' ? 1 : 0, ranged: obj.userData.kind === 'ranged' ? 1 : 0 });
         return { removed: true, kind: 'enemy', score: 3 };
       }
@@ -376,10 +482,52 @@ export class World {
         if (distSq < r*r) {
           const dist = Math.sqrt(distSq) || 0.0001;
           const push = r - dist;
-          tmpVecVec = tmpVec3.set(dx / dist, 0, dz / dist).multiplyScalar(push);
+          tmpVec3.set(dx / dist, 0, dz / dist).multiplyScalar(push);
           nextPos.add(tmpVec3);
         }
       }
     }
+  }
+
+  resetDynamic() {
+    // Remove targets
+    for (const t of this.targets) {
+      this.targetGroup.remove(t);
+      t.geometry.dispose();
+      if (Array.isArray(t.material)) t.material.forEach(m => m.dispose());
+      else t.material.dispose();
+    }
+    this.targets.length = 0;
+
+    // Remove enemies
+    for (const e of this.enemies) {
+      this.enemyGroup.remove(e);
+      e.geometry.dispose();
+      if (Array.isArray(e.material)) e.material.forEach(m => m.dispose());
+      else e.material.dispose();
+    }
+    this.enemies.length = 0;
+
+    // Remove projectiles
+    for (const p of this.projectiles) {
+      if (p.mesh) {
+        p.mesh.geometry.dispose();
+        p.mesh.material.dispose();
+        this.projectileGroup.remove(p.mesh);
+      }
+    }
+    this.projectiles.length = 0;
+
+    // FX
+    for (let i = this.fxGroup.children.length - 1; i >= 0; i--) {
+      const l = this.fxGroup.children[i];
+      l.geometry.dispose?.();
+      l.material.dispose?.();
+      this.fxGroup.remove(l);
+    }
+
+    // Respawn new entities
+    this.spawnTargets(10);
+    this.spawnEnemies({ melee: 4, ranged: 3 });
   }
 }
