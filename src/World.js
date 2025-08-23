@@ -20,7 +20,6 @@ export class World {
   constructor(scene) {
     this.scene = scene;
 
-    // Groups
     this.fxGroup = new THREE.Group();
     this.projectileGroup = new THREE.Group();
     this.enemyGroup = new THREE.Group();
@@ -30,7 +29,6 @@ export class World {
 
     this.scene.add(this.enemyGroup, this.projectileGroup, this.fxGroup, this.powerupGroup, this.goldGroup, this.portalGroup);
 
-    // Data
     this.enemies = [];
     this.obstacles = [];
     this.projectiles = [];
@@ -40,10 +38,8 @@ export class World {
     this.activeBoss = null;
     this.activeBossKind = null;
 
-    // Player ref values (read by RoomManager/main)
     this.playerHeight = 1.7;
 
-    // Setup (simple lights and a very large floor to avoid "falling"; rooms add their own walls)
     this._setupLights();
     this._setupBaseFloor();
 
@@ -56,7 +52,6 @@ export class World {
     this.resetDynamic(true);
   }
 
-  // Scene basics
   _setupLights() {
     const hemi = new THREE.HemisphereLight(0xbfd4ff, 0x202028, 0.55);
     const dir = new THREE.DirectionalLight(0xffffff, 0.7);
@@ -72,7 +67,7 @@ export class World {
     this.scene.add(floor);
   }
 
-  // Enemies
+  // Enemies (added turret, charger)
   spawnEnemyAt(kind, position, scope = 'room', roomId = null) {
     const healthScale = this.difficulty;
     const speedScale = 1 + (this.floor - 1) * 0.05;
@@ -95,14 +90,25 @@ export class World {
     } else if (kind === 'bomber') {
       mesh = new THREE.Mesh(new THREE.SphereGeometry(0.8, 12, 12), new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.6, metalness: 0.2, emissive: 0x6b4f0f, emissiveIntensity: 0.2 }));
       h = 1.6;
+    } else if (kind === 'turret') {
+      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 1.2, 12), new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.7, metalness: 0.2 }));
+      h = 1.2;
+    } else if (kind === 'charger') {
+      mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.2, 6, 12), new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.6, metalness: 0.15 }));
+      h = 2.2;
     } else {
       mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({ color: 0xd9534f, roughness: 0.7, metalness: 0.1 }));
       h = 2.0;
     }
 
     mesh.position.set(position.x, h*0.5, position.z);
-    const baseHealth = (kind === 'brute') ? 8 : (kind === 'skitter') ? 2 : (kind === 'sniper' || kind === 'bomber') ? 4 : 3;
-    const baseSpeed = (kind === 'skitter') ? 4.2 : (kind === 'brute') ? 2.0 : (kind === 'sniper') ? 2.2 : (kind === 'bomber') ? 2.4 : (kind === 'ranged' ? 2.4 : 3.0);
+    let baseHealth = 3, baseSpeed = 3.0;
+    if (kind === 'brute') baseHealth = 8, baseSpeed = 2.0;
+    else if (kind === 'skitter') baseHealth = 2, baseSpeed = 4.2;
+    else if (kind === 'sniper' || kind === 'bomber') baseHealth = 4, baseSpeed = (kind === 'sniper'?2.2:2.4);
+    else if (kind === 'ranged') baseHealth = 3, baseSpeed = 2.4;
+    else if (kind === 'turret') baseHealth = 6, baseSpeed = 0.0;
+    else if (kind === 'charger') baseHealth = 4, baseSpeed = 4.4;
 
     mesh.userData = {
       type: 'enemy',
@@ -122,13 +128,10 @@ export class World {
     return mesh;
   }
 
-  // Boss helper (re-uses older patterns)
   _spawnBossFor(kind) {
     if (this.activeBoss) return;
     const healthScale = 1 + (this.floor - 1) * 0.4;
     let pos = null, mesh = null, pattern = null, color = 0x8b5cf6, emissive = 0x5b21b6;
-
-    // Expect a .center vector passed in via temporary lair stubs
     if (kind === 'castle') {
       pos = (this.castle && this.castle.center) ? this.castle.center.clone() : new THREE.Vector3();
       mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 3.2, 12),
@@ -150,7 +153,7 @@ export class World {
     }
     mesh.userData = {
       type: 'boss',
-      kind: kind,
+      kind,
       health: Math.round(60 * healthScale),
       speed: 2.0,
       radius: 1.0,
@@ -165,7 +168,6 @@ export class World {
     this.activeBossKind = kind;
   }
 
-  // Projectiles
   spawnProjectile(from, dir, speed, owner = 'player', ttl = 2.0, damage = 1) {
     const pos = from.clone();
     const vel = dir.clone().normalize().multiplyScalar(speed);
@@ -179,9 +181,8 @@ export class World {
     this.projectiles.push({ pos, vel, ttl, radius, owner, damage, mesh });
   }
 
-  // Powerups (used by treasure and rewards)
   spawnPowerups(n = 8) {
-    const kinds = ['health', 'shield', 'damage', 'firerate', 'weapon_rifle', 'weapon_shotgun', 'ammo_rifle', 'ammo_shotgun'];
+    const kinds = ['health', 'shield', 'damage', 'firerate', 'weapon_rifle', 'weapon_shotgun', 'weapon_smg', 'ammo_rifle', 'ammo_shotgun', 'ammo_smg', 'crit', 'armor', 'haste'];
     for (let i = 0; i < n; i++) {
       const kind = kinds[i % kinds.length];
       const mesh = this._makePowerupMesh(kind);
@@ -193,7 +194,9 @@ export class World {
   _makePowerupMesh(kind) {
     const color = {
       health: 0x4ade80, shield: 0x60a5fa, damage: 0xf59e0b, firerate: 0xf472b6,
-      weapon_rifle: 0x9ca3af, weapon_shotgun: 0xef4444, ammo_rifle: 0x93c5fd, ammo_shotgun: 0xfda4af
+      weapon_rifle: 0x9ca3af, weapon_shotgun: 0xef4444, weapon_smg: 0x22d3ee,
+      ammo_rifle: 0x93c5fd, ammo_shotgun: 0xfda4af, ammo_smg: 0x99f6e4,
+      crit: 0xf43f5e, armor: 0x94a3b8, haste: 0x34d399
     }[kind] || 0xffffff;
     const mat = new THREE.MeshStandardMaterial({ color, emissive: color, emissiveIntensity: 0.25, roughness: 0.5, metalness: 0.3 });
     return new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), mat);
@@ -206,13 +209,17 @@ export class World {
       firerate: 'Fire-Rate Boost',
       weapon_rifle: 'Unlock Rifle',
       weapon_shotgun: 'Unlock Shotgun',
+      weapon_smg: 'Unlock SMG',
       ammo_rifle: 'Rifle Ammo',
-      ammo_shotgun: 'Shotgun Ammo'
+      ammo_shotgun: 'Shotgun Ammo',
+      ammo_smg: 'SMG Ammo',
+      crit: 'Crit Chance',
+      armor: 'Armor',
+      haste: 'Haste'
     };
     return map[kind] || 'Powerup';
   }
 
-  // Gold and portal
   spawnGold(point, amount = 1) {
     const geo = new THREE.IcosahedronGeometry(0.15, 0);
     const mat = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xca8a04, emissiveIntensity: 0.35, metalness: 0.6, roughness: 0.3 });
@@ -233,7 +240,6 @@ export class World {
     this.portals.push(ring);
   }
 
-  // Update world dynamics: coins, projectiles, enemies (AI)
   update(dt, playerPos, onPlayerHit, onEnemyShot, playerVulnerable = true) {
     // Powerups idle
     for (const p of this.powerupGroup.children) {
@@ -291,7 +297,7 @@ export class World {
       r.rotation.z = r.userData.spin;
     }
 
-    // Enemies
+    // Enemies AI
     if (playerPos) {
       for (const e of this.enemies) {
         const isBoss = e.userData.type === 'boss';
@@ -301,7 +307,7 @@ export class World {
         const dist = tmpVecA.length(); if (dist > 0.001) tmpVecA.normalize();
 
         if (!isBoss) {
-          if (kind === 'melee' || kind === 'skitter' || kind === 'brute' || kind === 'bomber') {
+          if (kind === 'melee' || kind === 'skitter' || kind === 'brute' || kind === 'bomber' || kind === 'charger') {
             const targetDist = (kind === 'bomber') ? 10 : 0;
             if (targetDist > 0) {
               if (dist < targetDist) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
@@ -313,9 +319,10 @@ export class World {
               e.userData.touchCd = Math.max(0, e.userData.touchCd - dt);
               if (onPlayerHit && playerVulnerable) {
                 const hitDmg = (kind === 'brute') ? Math.round(12 * this.difficulty) : Math.round(8 * this.difficulty);
-                if (dist < 1.2 && e.userData.touchCd <= 0) {
+                const reach = (kind === 'charger') ? 1.5 : 1.2;
+                if (dist < reach && e.userData.touchCd <= 0) {
                   onPlayerHit(hitDmg);
-                  e.userData.touchCd = 0.6;
+                  e.userData.touchCd = 0.5;
                 }
               }
             }
@@ -373,7 +380,7 @@ export class World {
             }
           }
         } else {
-          // Boss behaviors
+          // Boss behaviors (unchanged)
           const patt = e.userData.pattern;
           const min = (patt === 'spread') ? 14 : (patt === 'rings') ? 16 : 18;
           const max = (patt === 'spread') ? 26 : (patt === 'rings') ? 28 : 32;
@@ -416,7 +423,7 @@ export class World {
           }
         }
 
-        // Resolve collisions vs walls/gates
+        // Resolve collisions vs walls/shields/gates
         const nextPos = e.position.clone();
         this.resolveCollisions(nextPos, e.userData.radius, e.userData.height);
         e.position.copy(nextPos);
@@ -577,7 +584,6 @@ export class World {
     }
   }
 
-  // Interactions
   checkPlayerPickups(playerPos, playerHeight, onPowerup, onGold) {
     const head = playerPos.clone();
     const feet = playerPos.clone().add(new THREE.Vector3(0, -playerHeight, 0));
@@ -613,7 +619,6 @@ export class World {
     this.portals.length = 0;
   }
 
-  // Reset dynamic content
   resetDynamic(clearPortalsToo = true) {
     for (const e of this.enemies) {
       this.enemyGroup.remove(e);
