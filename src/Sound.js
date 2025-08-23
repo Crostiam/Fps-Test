@@ -5,7 +5,6 @@ export class Sound {
     this.ambient = null;
     this.muted = false;
     this.volume = 0.8; // 0..1
-    this.lastStepTime = 0;
   }
 
   init() {
@@ -31,10 +30,6 @@ export class Sound {
     this.master.gain.linearRampToValueAtTime(this.volume, this.ctx.currentTime + 0.05);
   }
 
-  getVolume() {
-    return this.volume;
-  }
-
   resume() {
     if (this.ctx && this.ctx.state !== 'running') this.ctx.resume();
   }
@@ -49,7 +44,6 @@ export class Sound {
     g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
     return g;
   }
-
   _osc(type, freq, dest) {
     const o = this.ctx.createOscillator();
     o.type = type;
@@ -58,7 +52,6 @@ export class Sound {
     o.start();
     return o;
   }
-
   _noise(dest, color = 'white') {
     const bufferSize = 2 * this.ctx.sampleRate;
     const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
@@ -67,13 +60,8 @@ export class Sound {
     for (let i = 0; i < bufferSize; i++) {
       const white = Math.random() * 2 - 1;
       if (color === 'white') data[i] = white;
-      else if (color === 'pink') {
-        lastOut = 0.98 * lastOut + 0.02 * white;
-        data[i] = lastOut;
-      } else if (color === 'brown') {
-        lastOut = (lastOut + 0.02 * white) / 1.02;
-        data[i] = lastOut * 3.5;
-      }
+      else if (color === 'pink') { lastOut = 0.98 * lastOut + 0.02 * white; data[i] = lastOut; }
+      else if (color === 'brown') { lastOut = (lastOut + 0.02 * white) / 1.02; data[i] = lastOut * 3.5; }
     }
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
@@ -95,7 +83,6 @@ export class Sound {
     n.start();
     o1.stop(t + 0.13); o2.stop(t + 0.13); n.stop(t + 0.07);
   }
-
   playEnemyShot() {
     if (!this.ctx || this.muted) return;
     const env = this._env(0.18, 0.6);
@@ -104,7 +91,6 @@ export class Sound {
     o.frequency.exponentialRampToValueAtTime(240, t + 0.18);
     o.stop(t + 0.19);
   }
-
   playHit() {
     if (!this.ctx || this.muted) return;
     const env = this._env(0.2, 0.7);
@@ -112,7 +98,6 @@ export class Sound {
     n.start();
     n.stop(this.ctx.currentTime + 0.2);
   }
-
   playStep() {
     if (!this.ctx || this.muted) return;
     const env = this._env(0.08, 0.5);
@@ -121,7 +106,6 @@ export class Sound {
     o.frequency.exponentialRampToValueAtTime(50, t + 0.08);
     o.stop(t + 0.09);
   }
-
   playPickup() {
     if (!this.ctx || this.muted) return;
     const env = this._env(0.25, 0.6);
@@ -129,6 +113,22 @@ export class Sound {
     const t = this.ctx.currentTime;
     o.frequency.exponentialRampToValueAtTime(880, t + 0.12);
     o.stop(t + 0.26);
+  }
+  playCoin() {
+    if (!this.ctx || this.muted) return;
+    const env = this._env(0.12, 0.5);
+    const o = this._osc('square', 900, env);
+    const t = this.ctx.currentTime;
+    o.frequency.exponentialRampToValueAtTime(1200, t + 0.12);
+    o.stop(t + 0.13);
+  }
+  playPortal() {
+    if (!this.ctx || this.muted) return;
+    const env = this._env(0.6, 0.4);
+    const o = this._osc('sine', 240, env);
+    const t = this.ctx.currentTime;
+    o.frequency.exponentialRampToValueAtTime(440, t + 0.6);
+    o.stop(t + 0.62);
   }
 
   startAmbient() {
@@ -141,7 +141,6 @@ export class Sound {
     n.start();
     this.ambient = n;
   }
-
   stopAmbient() {
     if (this.ambient) {
       try { this.ambient.stop(); } catch {}
