@@ -2,9 +2,15 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%235865f2%22/></svg>">
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1"
+    />
     <title>Web FPS Roguelike</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%235865f2%22/></svg>"
+    />
     <style>
       html, body, #app { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0e0e12; color: #eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
       .hud {
@@ -52,7 +58,11 @@
         position: fixed; top: 12px; right: 12px; background: rgba(88, 101, 242, 0.25); border: 1px solid #5865f2; color: #cfd3ff;
         padding: 6px 10px; border-radius: 8px; font-size: 12px; display: none; pointer-events: none;
       }
-      .hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: 0.85; }
+      .hint { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); font-size: 13px; opacity: 0.9; background: rgba(0,0,0,0.5); padding: 6px 8px; border-radius: 8px; }
+      #toast {
+        position: fixed; bottom: 60px; left: 50%; transform: translateX(-50%); background: rgba(17, 24, 39, 0.95);
+        border: 1px solid #334155; padding: 8px 12px; border-radius: 10px; font-size: 13px; display: none;
+      }
     </style>
   </head>
   <body>
@@ -62,6 +72,7 @@
     <div id="damageVignette"></div>
     <div class="crosshair"></div>
     <div class="hint" id="hint" style="display:none;">Press E to interact</div>
+    <div id="toast"></div>
 
     <!-- Home Screen with Upgrades -->
     <div class="home-overlay" id="home">
@@ -69,11 +80,12 @@
         <h1>Web FPS Roguelike</h1>
         <div class="stats" id="homeStats">Wallet Gold: 0</div>
         <div class="grid" style="margin-top:10px;">
-          <div class="shop" id="shop">
-            <!-- Populated by JS -->
-          </div>
+          <div class="shop" id="shop"></div>
           <div class="row">
             <button class="btn" id="startRunBtn">Start Run</button>
+          </div>
+          <div style="font-size:12px; opacity:0.85; margin-top:6px;">
+            Controls: WASD Move • Mouse Look • Click Shoot • Space Jump • Shift Sprint • 1/2/3 Switch Weapons • E Interact • P or ESC Pause
           </div>
         </div>
       </div>
