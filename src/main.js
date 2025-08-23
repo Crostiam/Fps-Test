@@ -3,6 +3,7 @@ import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockCont
 import { Input } from './Input.js';
 import { World } from './World.js';
 import { Sound } from './Sound.js';
+import { RoomManager } from './RoomManager.js';
 
 const app = document.getElementById('app');
 const hud = document.getElementById('hud');
@@ -58,6 +59,9 @@ window.addEventListener('keydown', (e) => { if (e.code === 'KeyE') interactPress
 // World
 const world = new World(scene);
 
+// Rooms
+const rooms = new RoomManager(world, null);
+
 // Sound
 const sound = new Sound();
 
@@ -68,7 +72,7 @@ const groundRay = new THREE.Raycaster();
 const State = { HOME: 'home', RUN: 'run', PAUSE: 'pause', DEAD: 'dead' };
 let state = State.HOME;
 
-// Profile (meta-upgrades) persisted in localStorage
+// Profile (meta-upgrades)
 const STORAGE_KEY = 'fps-roguelike-profile';
 function defaultProfile() {
   return {
@@ -109,7 +113,8 @@ function renderShop() {
   if (!shop || !homeStats) return;
   homeStats.textContent = `Wallet Gold: ${profile.gold}`;
   shop.innerHTML = '';
-  for (const u of UPGS) {
+  for (let idx=0; idx<UPGS.length; idx++) {
+    const u = UPGS[idx];
     const level = profile.upgrades[u.key] || 0;
     const maxed = u.max !== undefined && level >= u.max;
     const cost = maxed ? '-' : upgradeCost(u.key, level);
@@ -207,7 +212,7 @@ const guns = {
 let recoilT = 0;
 
 function buildGunModels() {
-  // Pistol: compact box + short barrel
+  // Pistol
   {
     const g = guns.pistol;
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.22, 0.5), new THREE.MeshStandardMaterial({ color: 0x394357, metalness: 0.5, roughness: 0.35 }));
@@ -220,7 +225,7 @@ function buildGunModels() {
     g.rotation.set(-0.05, 0.2, 0);
     camera.add(g);
   }
-  // Rifle: longer receiver/stock
+  // Rifle
   {
     const g = guns.rifle;
     const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.28, 1.0), new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.55, roughness: 0.25 }));
@@ -236,7 +241,7 @@ function buildGunModels() {
     g.rotation.set(-0.06, 0.25, 0.0);
     camera.add(g);
   }
-  // Shotgun: chunky body + twin barrels
+  // Shotgun
   {
     const g = guns.shotgun;
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.28, 0.9), new THREE.MeshStandardMaterial({ color: 0x3b2f2f, metalness: 0.4, roughness: 0.4 }));
@@ -266,7 +271,6 @@ function showOnlyGun(key) {
   guns.shotgun.visible = (key === 'shotgun');
 }
 function updateWeaponsUI() {
-  // Highlight slots
   slotPistol.classList.remove('active'); slotRifle.classList.remove('active'); slotShotgun.classList.remove('active');
   slotPistol.classList.remove('wlocked'); slotRifle.classList.remove('wlocked'); slotShotgun.classList.remove('wlocked');
   if (!unlockedWeapons.has('rifle')) slotRifle.classList.add('wlocked');
@@ -274,7 +278,6 @@ function updateWeaponsUI() {
   const active = currentWeaponKey === 'pistol' ? slotPistol : currentWeaponKey === 'rifle' ? slotRifle : slotShotgun;
   active.classList.add('active');
 
-  // Ammo text
   ammoPistol.textContent = 'Ammo: ∞';
   ammoRifle.textContent = `${ammo.rifle.mag} / ${ammo.rifle.reserve}`;
   ammoShotgun.textContent = `${ammo.shotgun.mag} / ${ammo.shotgun.reserve}`;
@@ -289,6 +292,9 @@ function startRun() {
   depth = 1;
   applyUpgrades();
   world.startFloor(depth);
+
+  // Rebuild room gates on new run/floor
+  // (Rooms are built from lairs in constructor; fine for now.)
 
   // Spawn and protection
   controls.getObject().position.copy(world.getSpawnPointInsideHouse());
@@ -388,12 +394,10 @@ function tryShoot() {
     }
     return;
   }
-  // Rate limit
   const now = performance.now() / 1000;
   const fireRate = def.fireRate * mods.fireRateMult;
   nextFireTime = now + 1 / Math.max(0.01, fireRate);
 
-  // Consume ammo (1 per trigger)
   if (currentWeaponKey !== 'pistol') {
     ammo[currentWeaponKey].mag = Math.max(0, ammo[currentWeaponKey].mag - 1);
   }
@@ -409,7 +413,6 @@ function tryReload() {
   const def = weapons[currentWeaponKey];
   if (a.mag >= def.magSize) return;
   if (a.reserve <= 0) return;
-  // start reload
   reloading = true;
   reloadTimeLeft = def.reload;
   if (!sound.ctx) sound.init(); sound.playReload();
@@ -444,7 +447,6 @@ function shootWeapon(def) {
     world.spawnProjectile(start, dir, def.projSpeed, 'player', 2.0, damage);
   }
 
-  // FX
   muzzle.visible = true; setTimeout(() => (muzzle.visible = false), 50);
   if (!sound.ctx) sound.init(); sound.playShot();
   recoilT = 0.12;
@@ -568,7 +570,12 @@ function loop() {
     }
 
     const playerPos = controls.getObject().position;
-    world.update(dt, playerPos, (dmg)=>onPlayerHit(dmg), ()=>onEnemyShot(), spawnProtectedTime <= 0 && mods.shieldTime <= 0);
+
+    // World update
+    world.update(dt, playerPos, function(dmg){ onPlayerHit(dmg); }, function(){ onEnemyShot(); }, spawnProtectedTime <= 0 && mods.shieldTime <= 0);
+
+    // Rooms update (clear detection, rewards, gating resume)
+    rooms.update(dt);
 
     // Timers
     if (spawnProtectedTime > 0) {
@@ -579,11 +586,13 @@ function loop() {
     if (modTimers.damageMult > 0) { modTimers.damageMult = Math.max(0, modTimers.damageMult - dt); if (modTimers.damageMult === 0) mods.damageMult = 1.0 + (profile.upgrades.damage || 0)*0.06; }
     if (modTimers.fireRateMult > 0) { modTimers.fireRateMult = Math.max(0, modTimers.fireRateMult - dt); if (modTimers.fireRateMult === 0) mods.fireRateMult = 1.0 + (profile.upgrades.fireRate || 0)*0.06; }
 
-    // Auto-pick gold; powerups require E (with label)
-    world.checkPlayerPickups(playerPos, applyPickup, onGoldPickup);
+    // Auto-pick gold by capsule
+    world.checkPlayerPickups(playerPos, player.height, function(kind){ applyPickup(kind); }, function(amt){ onGoldPickup(amt); });
 
-    // Interaction prompt for nearest powerup
+    // Interaction priority: reward/powerup prompt, then room entry, then portal text
     let promptShown = false;
+
+    // Powerup interaction (nearest)
     const nearP = world.getNearestPowerup(playerPos, 1.6);
     if (nearP) {
       const label = nearP.userData && nearP.userData.label ? nearP.userData.label : 'Powerup';
@@ -596,6 +605,19 @@ function loop() {
       }
     }
 
+    // Room entry (if not already in a room)
+    if (!promptShown && !rooms.isInRoom()) {
+      const nearRoom = rooms.getEnterableRoom(playerPos, 2.2);
+      if (nearRoom) {
+        hint.textContent = `Press E to enter ${nearRoom.kind.toUpperCase()} room`;
+        hint.style.display = 'block';
+        promptShown = true;
+        if (interactPressed) {
+          rooms.enterRoom(nearRoom);
+        }
+      }
+    }
+
     // Portal hint
     const nearPortal = world.checkPortalEntry(playerPos);
     if (!promptShown) {
@@ -603,20 +625,19 @@ function loop() {
       if (nearPortal) hint.textContent = 'Enter portal to go deeper';
     }
 
-    // Consume single press
-    interactPressed = false;
-
     // Floor transition via portal
     if (nearPortal) {
       depth += 1;
       world.clearPortals();
       if (!sound.ctx) sound.init(); sound.playPortal();
       world.startFloor(depth);
+      // Note: gates rebuilt by RoomManager constructor initially; existing gates remain fine for now.
       player.health = Math.min(player.maxHealth, player.health + Math.round(player.maxHealth * 0.25));
       spawnProtectedTime = 1.5; if (protectedBadge) protectedBadge.style.display = 'inline-block';
-      // reset reload
       reloading = false; reloadTimeLeft = 0;
     }
+
+    interactPressed = false;
 
     // Gun sway/recoil
     animateGun(now*0.001, dt);
@@ -638,7 +659,6 @@ function animateGun(t, dt) {
   if (recoilT > 0) recoilT = Math.max(0, recoilT - dt);
   const r = recoilT > 0 ? (recoilT / 0.12) : 0; const kick = r * 0.06;
 
-  // Apply to visible gun
   const g = guns[currentWeaponKey];
   g.position.x = (currentWeaponKey === 'pistol' ? 0.38 : 0.35) + sway;
   g.position.y = (currentWeaponKey === 'pistol' ? -0.32 : -0.35) + bob - kick*0.5;
