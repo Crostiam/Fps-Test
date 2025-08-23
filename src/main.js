@@ -36,9 +36,11 @@ const input = new Input();
 // World
 const world = new World(scene);
 
-// Raycaster for shooting
-const raycaster = new THREE.Raycaster();
-raycaster.far = 100;
+// Raycasters
+const shootRay = new THREE.Raycaster();
+shootRay.far = 100;
+
+const groundRay = new THREE.Raycaster();
 
 // Player state
 const player = {
@@ -49,7 +51,7 @@ const player = {
   jumpSpeed: 7.0,
   onGround: false,
   radius: 0.6,
-  height: 1.7
+  height: 1.7 // eye height
 };
 
 // Score/FPS
@@ -59,7 +61,32 @@ let acc = 0;
 let frames = 0;
 let fps = 0;
 
-// Pointer lock start
+// Simple gun attached to camera
+const gun = new THREE.Group();
+{
+  const bodyMat = new THREE.MeshStandardMaterial({ color: 0x303642, metalness: 0.2, roughness: 0.6 });
+  const accentMat = new THREE.MeshStandardMaterial({ color: 0x5865f2, emissive: 0x1a1f6a, emissiveIntensity: 0.25, metalness: 0.3, roughness: 0.3 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 1.0), bodyMat);
+  body.position.set(0, 0, 0.3);
+  const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.15, 0.5), accentMat);
+  barrel.position.set(0.17, 0, 0.85);
+  gun.add(body, barrel);
+  gun.position.set(0.35, -0.35, -0.6); // relative to camera
+  gun.rotation.set(-0.05, 0.25, 0.0);
+  camera.add(gun);
+  scene.add(camera);
+}
+
+// Muzzle flash (short-lived)
+const muzzle = new THREE.Mesh(
+  new THREE.SphereGeometry(0.06, 8, 8),
+  new THREE.MeshBasicMaterial({ color: 0xffe066 })
+);
+muzzle.visible = false;
+muzzle.position.set(0.17, -0.35, -0.05);
+camera.add(muzzle);
+
+// UI start
 startBtn.addEventListener('click', () => {
   renderer.domElement.requestPointerLock();
   overlay.style.display = 'none';
@@ -71,14 +98,21 @@ window.addEventListener('mousedown', (e) => {
   if (e.button === 0) shoot();
 });
 
+function getShootables() {
+  return [...world.targetGroup.children, ...world.enemyGroup.children];
+}
+
 function shoot() {
-  raycaster.setFromCamera({ x: 0, y: 0 }, camera);
-  const intersects = raycaster.intersectObjects(world.targetGroup.children, false);
+  shootRay.setFromCamera({ x: 0, y: 0 }, camera);
+  const intersects = shootRay.intersectObjects(getShootables(), true);
+  // Muzzle flash
+  muzzle.visible = true;
+  setTimeout(() => (muzzle.visible = false), 50);
+
   if (intersects.length > 0) {
-    if (world.handleHit(intersects[0])) {
-      score++;
-      flashHit();
-    }
+    const result = world.handleHit(intersects[0]);
+    if (result.score) score += result.score;
+    flashHit();
   }
 }
 
@@ -94,11 +128,13 @@ const forward = new THREE.Vector3();
 const right = new THREE.Vector3();
 
 function updateControls(dt) {
+  // Camera basis
   forward.set(0,0,-1).applyQuaternion(camera.quaternion);
   right.set(1,0,0).applyQuaternion(camera.quaternion);
   forward.y = 0; right.y = 0;
   forward.normalize(); right.normalize();
 
+  // Input to movement vector
   moveDir.set(0,0,0);
   if (input.forward) moveDir.add(forward);
   if (input.back) moveDir.sub(forward);
@@ -123,31 +159,41 @@ function updateControls(dt) {
     player.onGround = false;
   }
 
-  // Integrate
   const obj = controls.getObject();
   const nextPos = obj.position.clone().addScaledVector(player.velocity, dt);
 
-  // Ground check
-  const groundRay = new THREE.Raycaster(
-    new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z),
-    new THREE.Vector3(0, -1, 0),
-    0,
-    player.height + 0.2
-  );
-  const groundHits = groundRay.intersectObjects(scene.children, true).filter(h => h.object.name === 'floor' || h.object.name === 'obstacle');
-  const nearGround = groundHits.some(h => h.distance < player.height * 0.52);
-  if (nearGround && player.velocity.y <= 0) {
+  // Stable ground check: cast down from the camera (eye) to find ground within eye-height + epsilon
+  groundRay.set(new THREE.Vector3(nextPos.x, nextPos.y, nextPos.z), new THREE.Vector3(0, -1, 0));
+  groundRay.near = 0;
+  groundRay.far = player.height + 0.5;
+
+  // Only collide with floor-like geometry
+  const groundHits = groundRay.intersectObjects(scene.children, true)
+    .filter(h => h.object.name === 'floor' || h.object.name === 'obstacle' || h.object.name === 'house')
+    .sort((a, b) => a.distance - b.distance);
+
+  const hit = groundHits[0];
+  if (hit && hit.distance <= player.height + 0.05 && player.velocity.y <= 0) {
+    // Snap so eye is exactly player.height above the ground hit point
+    nextPos.y = hit.point.y + player.height;
     player.velocity.y = 0;
     player.onGround = true;
-    nextPos.y = Math.max(nextPos.y, 1.7);
   } else {
     player.onGround = false;
   }
 
-  // Collisions
+  // Horizontal collisions
   world.resolveCollisions(nextPos, player.radius, player.height);
 
   obj.position.copy(nextPos);
+}
+
+function animateGun(t, dt) {
+  // Minimal sway/bob
+  const sway = Math.sin(t * 6.0) * 0.004 * Math.min(1, player.velocity.length() / 6);
+  const bob = Math.cos(t * 12.0) * 0.002 * Math.min(1, player.velocity.length() / 6);
+  gun.position.x = 0.35 + sway;
+  gun.position.y = -0.35 + bob;
 }
 
 function resize() {
@@ -168,7 +214,11 @@ function loop() {
     updateControls(dt);
   }
 
-  world.update(dt);
+  // World update with player position so enemies can chase you
+  world.update(dt, controls.getObject().position);
+
+  animateGun(now * 0.001, dt);
+
   renderer.render(scene, camera);
 
   // FPS
@@ -177,7 +227,9 @@ function loop() {
     fps = Math.round(frames / acc);
     frames = 0; acc = 0;
   }
-  hud.textContent = `Score: ${score} | Targets: ${world.targets.length} | FPS: ${fps}`;
+  const targetsLeft = world.targets.length;
+  const enemiesLeft = world.enemies.length;
+  hud.textContent = `Score: ${score} | Targets: ${targetsLeft} | Enemies: ${enemiesLeft} | FPS: ${fps}`;
 
   requestAnimationFrame(loop);
 }
@@ -185,4 +237,4 @@ resize();
 requestAnimationFrame(loop);
 
 // Defaults for perf
-renderer.shadowMap.enabled = false;
+renderer.shadowMap.enabled = false
