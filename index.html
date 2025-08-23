@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>Web FPS Starter</title>
+    <style>
+      html, body, #app { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0e0e12; color: #eaeaea; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+      .hud {
+        position: fixed; top: 12px; left: 12px; background: rgba(0,0,0,0.35);
+        padding: 8px 10px; border-radius: 8px; font-size: 14px; user-select: none; pointer-events: none;
+        backdrop-filter: blur(4px);
+      }
+      .crosshair {
+        position: fixed; top: 50%; left: 50%; width: 12px; height: 12px;
+        transform: translate(-50%, -50%); pointer-events: none;
+      }
+      .crosshair::before, .crosshair::after {
+        content: ''; position: absolute; background: #ffffffcc;
+      }
+      .crosshair::before { width: 12px; height: 2px; left: 0; top: 5px; }
+      .crosshair::after { width: 2px; height: 12px; left: 5px; top: 0; }
+      .overlay {
+        position: fixed; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at center, rgba(20,20,28,0.6), rgba(10,10,14,0.9));
+      }
+      .start {
+        background: #1d1f2a; border: 1px solid #2e3040; padding: 22px 26px; border-radius: 12px; text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      }
+      .start button {
+        margin-top: 14px; padding: 10px 16px; border: 0; border-radius: 8px; cursor: pointer; background: #5865f2; color: white; font-weight: 600;
+      }
+      .controls {
+        margin-top: 8px; opacity: 0.85; font-size: 13px; line-height: 1.4;
+      }
+      a { color: #9ecbff; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div class="hud" id="hud">Score: 0 | Targets: 0 | FPS: 0</div>
+    <div class="crosshair"></div>
+
+    <div class="overlay" id="overlay">
+      <div class="start">
+        <div style="font-size:18px; font-weight:700;">Web FPS Starter</div>
+        <div class="controls">
+          WASD: Move • Mouse: Look • Click: Shoot • Space: Jump • Shift: Sprint
+        </div>
+        <button id="startBtn">Click to Play</button>
+      </div>
+    </div>
+
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
