@@ -1,18 +1,18 @@
 import * as THREE from 'three';
 
-const tmpVec3 = new THREE.Vector3();
-const tmpVecA = new THREE.Vector3();
-const tmpVecB = new THREE.Vector3();
+const tmpVec = new THREE.Vector3();
+const tmpA = new THREE.Vector3();
+const tmpB = new THREE.Vector3();
 
 function clamp01(x){ return Math.max(0, Math.min(1, x)); }
 function segmentPointDistance(a, b, p, outClosest = null) {
-  const ab = tmpVecA.copy(b).sub(a);
-  const ap = tmpVecB.copy(p).sub(a);
+  const ab = tmpA.copy(b).sub(a);
+  const ap = tmpB.copy(p).sub(a);
   const abLen2 = Math.max(1e-8, ab.lengthSq());
   let t = ap.dot(ab) / abLen2;
   t = clamp01(t);
   if (outClosest) outClosest.copy(a).addScaledVector(ab, t);
-  return tmpVecB.copy(a).addScaledVector(ab, t).sub(p).length();
+  return tmpB.copy(a).addScaledVector(ab, t).sub(p).length();
 }
 
 export class World {
@@ -30,7 +30,7 @@ export class World {
     this.powerupGroup = new THREE.Group();
     this.goldGroup = new THREE.Group();
     this.portalGroup = new THREE.Group();
-    this.lairGroup = new THREE.Group(); // bosses’ lairs (castle, pyramid, ice)
+    this.lairGroup = new THREE.Group();
 
     this.scene.add(
       this.targetGroup, this.enemyGroup, this.wallGroup, this.rockGroup,
@@ -45,40 +45,43 @@ export class World {
     this.projectiles = []; // {pos, vel, ttl, radius, owner, damage, mesh}
     this.houses = [];
     this.noSpawnVolumes = []; // Box3 exclusions
-    this.portals = []; // active portals for floor progression
+    this.portals = [];
     this.floor = 1;
     this.difficulty = 1;
     this.activeBoss = null;
     this.activeBossKind = null;
 
-    // Setup
+    // Setup static map
     this._setupLights();
     this._setupFloor();
     this._buildArenaWalls();
     this._setupHouses();
-    this._buildLairs(); // castle + pyramid + ice cave
+    this._buildLairs();     // castle + pyramid + ice (each with a gate)
     this._scatterRocks(80);
     this._setupAmbientObstacles();
 
+    // Dynamic seed
     this.spawnTargets(12);
-    this.spawnEnemies({ melee: 5, ranged: 3 });
+    this.spawnEnemies({ melee: 4, ranged: 3, jumper: 2, brute: 1, turret: 1 });
     this.spawnPowerups(10);
-
-    // Boss for current floor
     this._spawnRandomBossForFloor();
 
     this.ray = new THREE.Raycaster();
   }
 
-  // Public API to re-seed a floor with difficulty
   startFloor(floor) {
     this.floor = floor;
     this.difficulty = 1 + (floor - 1) * 0.35;
-    this.resetDynamic(false); // keep static geometry
+    this.resetDynamic(false);
     this.spawnTargets(12);
-    const baseMelee = 5 + Math.floor((floor - 1) * 1.5);
-    const baseRanged = 3 + Math.floor((floor - 1) * 1.0);
-    this.spawnEnemies({ melee: baseMelee, ranged: baseRanged });
+    const base = (n, mul) => Math.max(0, Math.round(n + (floor - 1) * mul));
+    this.spawnEnemies({
+      melee:  base(4, 1.5),
+      ranged: base(3, 1.2),
+      jumper: base(2, 0.8),
+      brute:  base(1, 0.6),
+      turret: base(1, 0.4)
+    });
     this.spawnPowerups(10);
     this._spawnRandomBossForFloor();
   }
@@ -109,8 +112,7 @@ export class World {
       m.name = 'arena_wall';
       m.userData.aabb = new THREE.Box3().setFromObject(m);
       m.userData.static = true;
-      this.wallGroup.add(m);
-      this.obstacles.push(m);
+      this.wallGroup.add(m); this.obstacles.push(m);
     };
     makeWall(L, t, 0, -L/2 + t/2);
     makeWall(L, t, 0,  L/2 - t/2);
@@ -132,8 +134,7 @@ export class World {
         wMesh.name = 'house_wall';
         wMesh.userData.aabb = new THREE.Box3().setFromObject(wMesh);
         wMesh.userData.static = true;
-        group.add(wMesh);
-        this.obstacles.push(wMesh);
+        group.add(wMesh); this.obstacles.push(wMesh);
       };
       const frontZ = -half + wallT/2;
       const sideW = (size - doorWidth) / 2;
@@ -155,15 +156,16 @@ export class World {
     makeHouse(14, 16, 12, 3.5, 2.6, 0.3, Math.PI * 0.25);
     makeHouse(-8, 18, 9, 3.0, 2.0, 0.3, -Math.PI * 0.2);
   }
+
   _buildLairs() {
     // Clear previous
     while (this.lairGroup.children.length) this.lairGroup.remove(this.lairGroup.children[0]);
 
-    // Castle
+    // Castle (gate on north)
     this.castle = this._buildCastle(0, -85, 36, 0.8, 6.5);
-    // Pyramid
+    // Pyramid (gate on south)
     this.pyramid = this._buildPyramid(-90, 40, 30, 8);
-    // Ice Cave
+    // Ice Cave (gate on west)
     this.icecave = this._buildIceCave(85, -30, 34, 7);
   }
 
@@ -171,10 +173,10 @@ export class World {
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x333845, roughness: 0.9, metalness: 0.05 });
     const towerMat = new THREE.MeshStandardMaterial({ color: 0x2f3440, roughness: 0.95, metalness: 0.04 });
     const group = new THREE.Group(); group.position.set(cx, 0, cz);
-    const addWall = (w, h, d, x, y, z) => {
+    const addWall = (w, h, d, x, y, z, name='castle_wall') => {
       const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), wallMat);
       m.position.set(x, y, z);
-      m.name = 'castle_wall';
+      m.name = name;
       m.userData.aabb = new THREE.Box3().setFromObject(m);
       m.userData.static = true;
       group.add(m); this.obstacles.push(m);
@@ -185,6 +187,7 @@ export class World {
     addWall(size, height, wallT, 0, height/2,  half - wallT/2);
     addWall(wallT, height, size, -half + wallT/2, height/2, 0);
     addWall(wallT, height, size,  half - wallT/2, height/2, 0);
+
     const towerR = 2.2, towerH = 8, towerGeo = new THREE.CylinderGeometry(towerR, towerR, towerH, 12);
     const towerPos = [
       [-half + towerR + wallT, towerH/2, -half + towerR + wallT],
@@ -210,27 +213,34 @@ export class World {
   }
 
   _buildPyramid(cx, cz, size, height) {
+    // South gate opening
     const group = new THREE.Group(); group.position.set(cx, 0, cz);
     const mat = new THREE.MeshStandardMaterial({ color: 0x8b6b3f, roughness: 0.95, metalness: 0.03 });
     const base = new THREE.Mesh(new THREE.BoxGeometry(size, 2, size), mat);
     base.position.set(0, 1, 0); base.name = 'pyramid_base';
-    group.add(base); base.userData.aabb = new THREE.Box3().setFromObject(base); base.userData.static = true; this.obstacles.push(base);
+    base.userData.aabb = new THREE.Box3().setFromObject(base);
+    base.userData.static = true;
+    group.add(base); this.obstacles.push(base);
 
-    // Four sloped sides approximated with boxes
     const sideT = 0.8, half = size/2;
-    const sideMat = new THREE.MeshStandardMaterial({ color: 0xa3844d, roughness: 0.95, metalness: 0.02 });
-    const sideW = size, sideH = height, sideD = sideT;
-    const sides = [
-      [0, height/2 + 2, -half + sideT/2, 0], // north
-      [0, height/2 + 2,  half - sideT/2, 0],
-      [-half + sideT/2, height/2 + 2, 0, Math.PI/2],
-      [ half - sideT/2, height/2 + 2, 0, Math.PI/2],
-    ];
-    for (const [x,y,z,ry] of sides) {
-      const s = new THREE.Mesh(new THREE.BoxGeometry(sideW, sideH, sideD), sideMat);
-      s.position.set(x,y,z); s.rotation.y = ry || 0; s.name='pyramid_wall';
-      group.add(s); s.userData.aabb = new THREE.Box3().setFromObject(s); s.userData.static = true; this.obstacles.push(s);
-    }
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0xa3844d, roughness: 0.95, metalness: 0.02 });
+
+    const addWall = (w,h,d,x,y,z,ry,name='pyramid_wall') => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
+      m.position.set(x,y,z); m.rotation.y = ry || 0; m.name=name;
+      m.userData.aabb = new THREE.Box3().setFromObject(m);
+      m.userData.static = true; group.add(m); this.obstacles.push(m);
+    };
+    // Make a gate on the south side (towards +Z): split into two segments
+    const gateW = 4, sideW = (size - gateW);
+    addWall(sideW/2, height, sideT, -gateW/2 - sideW/4, height/2 + 2, half - sideT/2, 0);
+    addWall(sideW/2, height, sideT,  gateW/2 + sideW/4, height/2 + 2, half - sideT/2, 0);
+
+    // Other three walls
+    addWall(size, height, sideT, 0, height/2 + 2, -half + sideT/2, 0);
+    addWall(sideT, height, size, -half + sideT/2, height/2 + 2, 0, Math.PI/2);
+    addWall(sideT, height, size,  half - sideT/2, height/2 + 2, 0, Math.PI/2);
+
     this.lairGroup.add(group);
     const inner = new THREE.Box3(
       new THREE.Vector3(cx - half + sideT, 0, cz - half + sideT),
@@ -241,27 +251,35 @@ export class World {
   }
 
   _buildIceCave(cx, cz, size, height) {
+    // West gate opening
     const group = new THREE.Group(); group.position.set(cx, 0, cz);
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x3b4a6b, roughness: 0.95, metalness: 0.04 });
     const half = size/2, t = 0.8;
-    const addWall = (w,h,d,x,y,z) => {
-      const wMesh = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
-      wMesh.position.set(x,y,z); wMesh.name='ice_wall';
-      group.add(wMesh); wMesh.userData.aabb=new THREE.Box3().setFromObject(wMesh); wMesh.userData.static=true; this.obstacles.push(wMesh);
+
+    const addWall = (w,h,d,x,y,z,name='ice_wall') => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), wallMat);
+      m.position.set(x,y,z); m.name=name;
+      m.userData.aabb = new THREE.Box3().setFromObject(m);
+      m.userData.static = true; group.add(m); this.obstacles.push(m);
     };
+    // Gate on west wall (x = -half): split top/bottom with a gap centered
+    addWall(t, height, (size - 6)/2, -half + t/2, height/2, -3 - (size - 6)/4);
+    addWall(t, height, (size - 6)/2, -half + t/2, height/2,  3 + (size - 6)/4);
+
+    // Other three walls
     addWall(size, height, t, 0, height/2, -half + t/2);
     addWall(size, height, t, 0, height/2,  half - t/2);
-    addWall(t, height, size, -half + t/2, height/2, 0);
     addWall(t, height, size,  half - t/2, height/2, 0);
 
-    // Crystals (obstacles)
+    // Crystals
     const crystalMat = new THREE.MeshStandardMaterial({ color: 0x7dd3fc, emissive: 0x1e3a8a, emissiveIntensity: 0.3, metalness: 0.2, roughness: 0.6 });
     for (let i=0;i<6;i++){
       const r = 0.6 + Math.random()*1.2;
       const m = new THREE.Mesh(new THREE.ConeGeometry(r, r*3, 6), crystalMat);
       m.position.set((Math.random()-0.5)*(size-6), r*1.5, (Math.random()-0.5)*(size-6));
-      m.name='ice_crystal'; group.add(m);
-      m.userData.aabb=new THREE.Box3().setFromObject(m); m.userData.static=true; this.obstacles.push(m);
+      m.name='ice_crystal';
+      m.userData.aabb=new THREE.Box3().setFromObject(m);
+      m.userData.static=true; group.add(m); this.obstacles.push(m);
     }
     this.lairGroup.add(group);
     const inner = new THREE.Box3(
@@ -272,8 +290,33 @@ export class World {
     return { group, center: new THREE.Vector3(cx,0,cz), size, height };
   }
 
+  _scatterRocks(n = 60) {
+    const colors = [0x6b6f7a, 0x545962, 0x3f4450];
+    let placed = 0, attempts = 0;
+    while (placed < n && attempts < n * 20) {
+      attempts++;
+      const r = 0.7 + Math.random() * 2.0;
+      const geo = new THREE.IcosahedronGeometry(r, 1);
+      const mat = new THREE.MeshStandardMaterial({
+        color: colors[Math.floor(Math.random() * colors.length)],
+        roughness: 0.95,
+        metalness: 0.02
+      });
+      const rock = new THREE.Mesh(geo, mat);
+      const pos = this._randAway(220);
+      if (this._pointInsideAnyInterior(pos) || this._pointInsideAnyNoSpawn(pos)) continue;
+      rock.position.set(pos.x, r * 0.5, pos.z);
+      rock.rotation.set(Math.random() * 0.3, Math.random() * Math.PI, Math.random() * 0.3);
+      rock.name = 'rock';
+      rock.userData.aabb = new THREE.Box3().setFromObject(rock);
+      rock.userData.static = true;
+      this.rockGroup.add(rock);
+      this.obstacles.push(rock);
+      placed++;
+    }
+  }
+
   _setupAmbientObstacles() {
-    // A few cubes outside of interiors
     const mat = new THREE.MeshStandardMaterial({ color: 0x44597a, metalness: 0.05, roughness: 0.8 });
     const geo = new THREE.BoxGeometry(4, 4, 4);
     const positions = [[8,2,-8], [-10,2,-15], [15,2,12], [-12,2,10], [0,2,18], [18,2,0]];
@@ -306,7 +349,12 @@ export class World {
     }
     return false;
   }
-
+  _randAway(range=180) {
+    let p = new THREE.Vector3(); let tries=0;
+    do { p.set((Math.random()-0.5)*range, 0, (Math.random()-0.5)*range); tries++; }
+    while ((this._pointInsideAnyInterior(p) || this._pointInsideAnyNoSpawn(p)) && tries < 40);
+    return p;
+  }
   getSpawnPointInsideHouse() {
     if (this.houses.length === 0) return new THREE.Vector3(0, 1.7, 0);
     const h = this.houses[Math.floor(Math.random()*this.houses.length)];
@@ -316,30 +364,17 @@ export class World {
       0,
       Math.random()*((half - h.wallT - 1.2)) - (half - h.wallT - 1.2)/2
     );
-    const world = local.clone();
-    h.group.localToWorld(world);
-    world.y = 1.7;
-    return world;
+    const world = local.clone(); h.group.localToWorld(world);
+    world.y = 1.7; return world;
   }
 
   // Spawners
-  _randAway(range=180) {
-    let p = new THREE.Vector3();
-    let tries=0;
-    do {
-      p.set((Math.random()-0.5)*range, 0, (Math.random()-0.5)*range);
-      tries++;
-    } while ((this._pointInsideAnyInterior(p) || this._pointInsideAnyNoSpawn(p)) && tries < 40);
-    return p;
-  }
-
   spawnTargets(count = 10) {
     const geo = new THREE.SphereGeometry(0.7, 12, 12);
     for (let i = 0; i < count; i++) {
       const mat = new THREE.MeshStandardMaterial({
         color: new THREE.Color().setHSL(Math.random(), 0.6, 0.6),
-        metalness: 0.2,
-        roughness: 0.5
+        metalness: 0.2, roughness: 0.5
       });
       const t = new THREE.Mesh(geo, mat);
       const p = this._randAway(200);
@@ -351,40 +386,55 @@ export class World {
         bobPhase: Math.random() * Math.PI * 2,
         rotSpeed: (Math.random() * 0.8 + 0.2) * (Math.random() < 0.5 ? -1 : 1)
       };
-      this.targetGroup.add(t);
-      this.targets.push(t);
+      this.targetGroup.add(t); this.targets.push(t);
     }
   }
 
-  spawnEnemies({ melee = 4, ranged = 2 } = {}) {
+  spawnEnemies({ melee = 4, ranged = 2, jumper = 1, brute = 1, turret = 0 } = {}) {
     const healthScale = this.difficulty;
     const speedScale = 1 + (this.floor - 1) * 0.05;
+
     const spawnOne = (kind) => {
-      const h = 2.0;
-      const geo = new THREE.BoxGeometry(1, h, 1);
-      const mat = new THREE.MeshStandardMaterial({
-        color: kind === 'ranged' ? 0x9b59b6 : 0xd9534f,
-        metalness: 0.1,
-        roughness: 0.7
-      });
-      const e = new THREE.Mesh(geo, mat);
+      let mesh, h = 2.0;
+      if (kind === 'brute') {
+        h = 2.6;
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, h, 1.2), new THREE.MeshStandardMaterial({ color: 0x8b0000, metalness: 0.1, roughness: 0.7 }));
+      } else if (kind === 'jumper') {
+        h = 1.6;
+        mesh = new THREE.Mesh(new THREE.TetrahedronGeometry(0.9, 0), new THREE.MeshStandardMaterial({ color: 0x22c55e, metalness: 0.1, roughness: 0.6 }));
+      } else if (kind === 'turret') {
+        h = 1.4;
+        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.8, h, 10), new THREE.MeshStandardMaterial({ color: 0x9ca3af, metalness: 0.2, roughness: 0.7 }));
+      } else if (kind === 'ranged') {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1, h, 1), new THREE.MeshStandardMaterial({ color: 0x9b59b6, metalness: 0.1, roughness: 0.7 }));
+      } else {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1, h, 1), new THREE.MeshStandardMaterial({ color: 0xd9534f, metalness: 0.1, roughness: 0.7 }));
+      }
+
       const pos = this._randAway(200);
-      e.position.set(pos.x, h*0.5, pos.z);
-      e.userData = {
+      mesh.position.set(pos.x, h*0.5, pos.z);
+      mesh.userData = {
         type: 'enemy',
         kind,
-        health: Math.round(3 * healthScale),
-        speed: (kind === 'ranged' ? 2.4 : 3.0) * speedScale * (0.9 + Math.random()*0.3),
-        radius: 0.5,
+        health: Math.round({ melee: 3, ranged: 3, jumper: 2, brute: 8, turret: 5 }[kind] * healthScale),
+        speed: { melee: 3.2, ranged: 2.6, jumper: 3.0, brute: 2.2, turret: 0 }[kind] * speedScale * (0.9 + Math.random()*0.3),
+        radius: kind === 'brute' ? 0.8 : 0.5,
         height: h,
         shootCooldown: 0,
-        phase: Math.random() * Math.PI * 2
+        contactCooldown: 0,
+        phase: Math.random() * Math.PI * 2,
+        vy: 0, // jumper/bounce
+        chargeTime: 0 // brute windup/charge
       };
-      this.enemyGroup.add(e);
-      this.enemies.push(e);
+      this.enemyGroup.add(mesh);
+      this.enemies.push(mesh);
     };
-    for (let i = 0; i < melee; i++) spawnOne('melee');
-    for (let i = 0; i < ranged; i++) spawnOne('ranged');
+
+    for (let i=0;i<melee;i++)  spawnOne('melee');
+    for (let i=0;i<ranged;i++) spawnOne('ranged');
+    for (let i=0;i<jumper;i++) spawnOne('jumper');
+    for (let i=0;i<brute;i++)  spawnOne('brute');
+    for (let i=0;i<turret;i++) spawnOne('turret');
   }
 
   spawnPowerups(n = 8) {
@@ -407,7 +457,6 @@ export class World {
     return new THREE.Mesh(new THREE.OctahedronGeometry(0.35, 0), mat);
   }
 
-  // Bosses
   _spawnRandomBossForFloor() {
     const options = ['castle', 'pyramid', 'ice'];
     const pick = options[Math.floor(Math.random()*options.length)];
@@ -467,47 +516,14 @@ export class World {
     this.projectiles.push({ pos, vel, ttl, radius, owner, damage, mesh });
   }
 
-  //rockss
-  _scatterRocks(n = 60) {
-    const colors = [0x6b6f7a, 0x545962, 0x3f4450];
-    let placed = 0, attempts = 0;
-    while (placed < n && attempts < n * 20) {
-      attempts++;
-
-      const r = 0.7 + Math.random() * 2.0;
-      const geo = new THREE.IcosahedronGeometry(r, 1);
-      const mat = new THREE.MeshStandardMaterial({
-        color: colors[Math.floor(Math.random() * colors.length)],
-        roughness: 0.95,
-        metalness: 0.02
-      });
-      const rock = new THREE.Mesh(geo, mat);
-
-      // Use the helper that avoids house interiors and no-spawn volumes
-      const pos = this._randAway(220);
-      // If _randAway returned a point we can’t use (very unlikely), skip
-      if (this._pointInsideAnyInterior(pos) || this._pointInsideAnyNoSpawn(pos)) continue;
-
-      rock.position.set(pos.x, r * 0.5, pos.z);
-      rock.rotation.set(Math.random() * 0.3, Math.random() * Math.PI, Math.random() * 0.3);
-      rock.name = 'rock';
-
-      rock.userData.aabb = new THREE.Box3().setFromObject(rock);
-      rock.userData.static = true;
-
-      this.rockGroup.add(rock);
-      this.obstacles.push(rock);
-
-      placed++;
-    }
-  }
-  // Gold
+  // Gold (with gravity)
   spawnGold(point, amount = 1) {
     const geo = new THREE.IcosahedronGeometry(0.15, 0);
     const mat = new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xca8a04, emissiveIntensity: 0.35, metalness: 0.6, roughness: 0.3 });
     const m = new THREE.Mesh(geo, mat);
-    m.position.copy(point); m.position.y = Math.max(m.position.y, 0.5);
-    m.userData = { type: 'gold', amount, ttl: 12, spin: Math.random()*Math.PI*2 };
+    m.position.copy(point);
+    m.position.y = Math.max(m.position.y, 0.6);
+    m.userData = { type: 'gold', amount, vy: 3 + Math.random()*1.5, ttl: 30, spin: Math.random()*Math.PI*2, grounded: false };
     this.goldGroup.add(m);
   }
 
@@ -523,7 +539,7 @@ export class World {
     this.portals.push(ring);
   }
 
-  update(dt, playerPos = null, onPlayerHit = null, onEnemyShot = null, playerVulnerable = true) {
+  update(dt, playerPos, onPlayerHit, onEnemyShot, playerVulnerable) {
     // Animate powerups/gold/portal
     for (const p of this.powerupGroup.children) {
       p.userData.spin += dt;
@@ -535,6 +551,20 @@ export class World {
       g.userData.ttl -= dt;
       g.userData.spin += dt*4;
       g.rotation.y = g.userData.spin;
+      // Gravity
+      if (!g.userData.grounded) {
+        g.userData.vy -= 12 * dt;
+        g.position.y += g.userData.vy * dt;
+        if (g.position.y <= 0.15) {
+          g.position.y = 0.15;
+          if (Math.abs(g.userData.vy) > 1.2) {
+            g.userData.vy = -g.userData.vy * 0.25; // bounce
+          } else {
+            g.userData.vy = 0;
+            g.userData.grounded = true;
+          }
+        }
+      }
       if (g.userData.ttl <= 0) {
         g.geometry.dispose(); g.material.dispose(); this.goldGroup.remove(g);
       }
@@ -550,24 +580,27 @@ export class World {
       t.position.y = t.userData.baseY + Math.sin(t.userData.bobPhase += dt * 2.0) * 0.25;
     }
 
-    // Enemies (incl. bosses)
+    // Enemies AI + contact damage
     if (playerPos) {
       for (const e of this.enemies) {
         const isBoss = e.userData.type === 'boss';
         const kind = isBoss ? 'boss' : e.userData.kind;
-        tmpVecA.set(playerPos.x, e.position.y, playerPos.z).sub(e.position); tmpVecA.y = 0;
-        const dist = tmpVecA.length(); if (dist > 0.001) tmpVecA.normalize();
+        e.userData.contactCooldown = Math.max(0, e.userData.contactCooldown - dt);
+
+        tmpA.set(playerPos.x, e.position.y, playerPos.z).sub(e.position);
+        tmpA.y = 0;
+        const dist = tmpA.length();
+        if (dist > 0.001) tmpA.normalize();
 
         if (!isBoss) {
           if (kind === 'melee') {
-            e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
-          } else {
-            // Ranged keep distance
+            e.position.addScaledVector(tmpA, e.userData.speed * dt);
+          } else if (kind === 'ranged') {
             const min = 12, max = 24;
-            if (dist < min) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
-            else if (dist > max) e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
+            if (dist < min) e.position.addScaledVector(tmpA, -e.userData.speed * dt);
+            else if (dist > max) e.position.addScaledVector(tmpA, e.userData.speed * dt);
             else {
-              const perp = tmpVecB.set(-tmpVecA.z, 0, tmpVecA.x).normalize();
+              const perp = tmpB.set(-tmpA.z, 0, tmpA.x).normalize();
               const s = Math.sin(performance.now()*0.001 + e.userData.phase) * 0.6;
               e.position.addScaledVector(perp, s * dt * e.userData.speed);
             }
@@ -587,14 +620,54 @@ export class World {
                 e.userData.shootCooldown = 1.1 + Math.random()*0.6;
               } else e.userData.shootCooldown = 0.3 + Math.random()*0.4;
             }
+          } else if (kind === 'jumper') {
+            // Hop toward the player
+            if (Math.random() < 0.02) {
+              e.userData.vy = 6 + Math.random()*2;
+              e.position.addScaledVector(tmpA, 1.2); // hop forward
+            }
+            e.userData.vy -= 12 * dt;
+            e.position.y = Math.max(e.userData.height*0.5, e.position.y + e.userData.vy * dt);
+            if (e.position.y <= e.userData.height*0.5) e.userData.vy = 0;
+            e.position.addScaledVector(tmpA, e.userData.speed * 0.5 * dt);
+          } else if (kind === 'brute') {
+            // Wind-up then charge
+            if (dist < 20) {
+              e.userData.chargeTime += dt;
+              if (e.userData.chargeTime > 1.0) {
+                // charge burst
+                e.position.addScaledVector(tmpA, e.userData.speed * 3.0 * dt);
+                if (e.userData.chargeTime > 1.6) e.userData.chargeTime = 0;
+              } else {
+                // slow approach
+                e.position.addScaledVector(tmpA, e.userData.speed * 0.7 * dt);
+              }
+            } else {
+              e.position.addScaledVector(tmpA, e.userData.speed * dt);
+            }
+          } else if (kind === 'turret') {
+            // stationary shooter
+            e.userData.shootCooldown -= dt;
+            if (playerVulnerable && e.userData.shootCooldown <= 0 && onEnemyShot) {
+              const from = e.position.clone().setY(e.position.y + 0.8);
+              const dir = playerPos.clone().sub(from).normalize();
+              this.ray.set(from, dir); this.ray.far = 80;
+              const hits = this.ray.intersectObjects(this.obstacles, true);
+              const clear = !hits[0] || hits[0].distance > from.distanceTo(playerPos);
+              if (clear) {
+                const dmg = Math.round(7 * this.difficulty);
+                this.spawnProjectile(from, dir, 48, 'enemy', 2.2, dmg);
+                onEnemyShot(); e.userData.shootCooldown = 1.4 + Math.random()*0.6;
+              } else e.userData.shootCooldown = 0.4 + Math.random()*0.4;
+            }
           }
         } else {
           // Boss behaviors
           const patt = e.userData.pattern;
           if (patt === 'bursts') {
             const min = 18, max = 32;
-            if (dist < min) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
-            else if (dist > max) e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
+            if (dist < min) e.position.addScaledVector(tmpA, -e.userData.speed * dt);
+            else if (dist > max) e.position.addScaledVector(tmpA, e.userData.speed * dt);
             e.userData.shootCooldown -= dt;
             if (playerVulnerable && e.userData.shootCooldown <= 0 && onEnemyShot) {
               const from = e.position.clone().setY(e.position.y + 1.2);
@@ -617,12 +690,11 @@ export class World {
             }
           } else if (patt === 'spread') {
             const min = 14, max = 26;
-            if (dist < min) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
-            else if (dist > max) e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
+            if (dist < min) e.position.addScaledVector(tmpA, -e.userData.speed * dt);
+            else if (dist > max) e.position.addScaledVector(tmpA, e.userData.speed * dt);
             e.userData.shootCooldown -= dt;
             if (playerVulnerable && e.userData.shootCooldown <= 0 && onEnemyShot) {
               const from = e.position.clone().setY(e.position.y + 1.0);
-              // cone spread
               for (let i=-2;i<=2;i++){
                 const dir = playerPos.clone().sub(from).normalize();
                 const yaw = i * 0.08;
@@ -635,9 +707,8 @@ export class World {
             }
           } else if (patt === 'rings') {
             const min = 16, max = 28;
-            if (dist < min) e.position.addScaledVector(tmpVecA, -e.userData.speed * dt);
-            else if (dist > max) e.position.addScaledVector(tmpVecA, e.userData.speed * dt);
-            // slow frequent rings
+            if (dist < min) e.position.addScaledVector(tmpA, -e.userData.speed * dt);
+            else if (dist > max) e.position.addScaledVector(tmpA, e.userData.speed * dt);
             e.userData.burstCooldown -= dt;
             if (playerVulnerable && e.userData.burstCooldown <= 0 && onEnemyShot) {
               const from = e.position.clone().setY(e.position.y + 0.9);
@@ -653,47 +724,73 @@ export class World {
           }
         }
 
-        // Resolve collisions
+        // Contact damage
+        if (playerVulnerable && e.userData.contactCooldown <= 0) {
+          const touchR = (e.userData.radius || 0.5) + 0.5; // player capsule radius ~0.5
+          const d2 = (e.position.x - playerPos.x)**2 + (e.position.z - playerPos.z)**2;
+          if (d2 <= touchR * touchR) {
+            const base = isBoss ? 12 : ({ melee: 8, ranged: 4, jumper: 6, brute: 14, turret: 0 }[e.userData.kind] || 6);
+            onPlayerHit?.(Math.round(base * this.difficulty));
+            e.userData.contactCooldown = 0.8; // brief i-frames per enemy
+          }
+        }
+
+        // Resolve collisions vs world (horizontal)
         const nextPos = e.position.clone();
         this.resolveCollisions(nextPos, e.userData.radius, e.userData.height);
         e.position.copy(nextPos);
       }
     }
 
-    // Projectiles advance and collide
+    // Projectiles advance and collide (including player hit)
     for (let i = this.projectiles.length - 1; i >= 0; i--) {
       const p = this.projectiles[i];
       const start = p.pos.clone();
-      const delta = tmpVec3.copy(p.vel).multiplyScalar(dt);
+      const delta = tmpVec.copy(p.vel).multiplyScalar(dt);
       const end = start.clone().add(delta);
       this.ray.set(start, delta.clone().normalize());
       this.ray.far = delta.length() + 0.001;
 
-      let hit = null;
       if (p.owner === 'player') {
         const colliders = [...this.obstacles, ...this.enemyGroup.children, ...this.targetGroup.children];
         const hits = this.ray.intersectObjects(colliders, true);
-        hit = hits[0] || null;
+        const hit = hits[0] || null;
         if (hit) {
           this._spawnTracer(start, hit.point, 0xffe066, 0.06);
           const kind = hit.object.userData?.type;
-          if (kind === 'enemy' || kind === 'target' || kind === 'boss') {
-            this.handleHit(hit, p.damage);
-          }
+          if (kind === 'enemy' || kind === 'target' || kind === 'boss') this.handleHit(hit, p.damage);
           this._removeProjectileAt(i);
           continue;
         }
       } else {
-        const hits = this.ray.intersectObjects(this.obstacles, true);
-        hit = hits[0] || null;
-        if (hit) {
-          this._spawnTracer(start, hit.point, 0xbf5fff, 0.06);
+        // Enemy projectile: obstacle block or player hit
+        const obstacleHits = this.ray.intersectObjects(this.obstacles, true);
+        const firstObstacle = obstacleHits[0];
+
+        if (playerPos && playerVulnerable) {
+          const closest = tmpA;
+          const d = segmentPointDistance(start, end, playerPos, closest);
+          const playerRadius = 0.45;
+          if (d <= playerRadius) {
+            const distSeg = start.distanceTo(closest);
+            const blocked = firstObstacle && firstObstacle.distance < distSeg - 0.001;
+            if (!blocked) {
+              onPlayerHit?.(p.damage);
+              this._spawnTracer(start, closest.clone(), 0xbf5fff, 0.06);
+              this._removeProjectileAt(i);
+              continue;
+            }
+          }
+        }
+
+        if (firstObstacle) {
+          this._spawnTracer(start, firstObstacle.point, 0xbf5fff, 0.06);
           this._removeProjectileAt(i);
           continue;
         }
-        // Player collision tested outside (main) using player capsule; here skip.
       }
 
+      // No hit: advance
       p.pos.copy(end);
       p.mesh.position.copy(p.pos);
       p.ttl -= dt;
@@ -728,8 +825,7 @@ export class World {
     const obj = intersection.object;
     if (obj.userData?.type === 'target') {
       obj.userData.health -= damage;
-      // Drop a small coin on any hit
-      this.spawnGold(intersection.point, 1);
+      this.spawnGold(intersection.point, 1); // coin on hit
       if (obj.userData.health <= 0) {
         this.targetGroup.remove(obj);
         this.targets = this.targets.filter(t => t !== obj);
@@ -751,8 +847,8 @@ export class World {
         this.enemyGroup.remove(obj);
         this.enemies = this.enemies.filter(e => e !== obj);
         obj.geometry.dispose(); Array.isArray(obj.material) ? obj.material.forEach(m=>m.dispose()) : obj.material.dispose();
-        // respawn same type later
-        this.spawnEnemies({ melee: obj.userData.kind === 'melee' ? 1 : 0, ranged: obj.userData.kind === 'ranged' ? 1 : 0 });
+        // respawn same type
+        this.spawnEnemies({ [obj.userData.kind]: 1 });
         return { removed: true, kind: 'enemy', score: 3 };
       }
       return { removed: false, kind: 'enemy', score: 0 };
@@ -761,7 +857,6 @@ export class World {
       obj.userData.health -= damage;
       const mat = obj.material; const oldE = mat.emissiveIntensity; mat.emissiveIntensity = 0.5; setTimeout(() => mat.emissiveIntensity = oldE, 80);
       if (obj.userData.health <= 0) {
-        // Lots of coins and portal spawn
         for (let i=0;i<20;i++) this.spawnGold(intersection.point.clone().add(new THREE.Vector3((Math.random()-0.5)*2.2, 0, (Math.random()-0.5)*2.2)), 3);
         const where = obj.position.clone(); where.y = 0.1;
         this.spawnPortal(where);
@@ -788,25 +883,30 @@ export class World {
         const distSq = dx*dx + dz*dz, r = playerRadius + 0.001;
         if (distSq < r*r) {
           const dist = Math.sqrt(distSq) || 0.0001, push = r - dist;
-          tmpVec3.set(dx / dist, 0, dz / dist).multiplyScalar(push);
-          nextPos.add(tmpVec3);
+          tmpVec.set(dx / dist, 0, dz / dist).multiplyScalar(push);
+          nextPos.add(tmpVec);
         }
       }
     }
   }
 
-  checkPlayerPickups(playerPos, onPowerup, onGold) {
-    // Powerups
-    for (let i = this.powerupGroup.children.length - 1; i >= 0; i--) {
-      const p = this.powerupGroup.children[i];
-      if (p.position.distanceTo(playerPos) < 1.3) {
-        const kind = p.userData.kind;
-        p.geometry.dispose(); Array.isArray(p.material) ? p.material.forEach(m=>m.dispose()) : p.material.dispose();
-        this.powerupGroup.remove(p);
-        onPowerup(kind);
-      }
+  // Powerups: interactable (E) — helpers for main loop
+  getNearestPowerup(playerPos, maxDist = 1.6) {
+    let nearest = null, best = maxDist;
+    for (const p of this.powerupGroup.children) {
+      const d = p.position.distanceTo(playerPos);
+      if (d < best) { best = d; nearest = p; }
     }
-    // Gold
+    return nearest;
+  }
+  consumePowerup(mesh) {
+    const kind = mesh.userData.kind;
+    mesh.geometry.dispose(); Array.isArray(mesh.material) ? mesh.material.forEach(m=>m.dispose()) : mesh.material.dispose();
+    this.powerupGroup.remove(mesh);
+    return kind;
+  }
+
+  checkPlayerGoldPickups(playerPos, onGold) {
     for (let i = this.goldGroup.children.length - 1; i >= 0; i--) {
       const g = this.goldGroup.children[i];
       if (g.position.distanceTo(playerPos) < 1.2) {
@@ -824,7 +924,6 @@ export class World {
     }
     return false;
   }
-
   clearPortals() {
     for (let i=this.portalGroup.children.length-1;i>=0;i--){
       const r = this.portalGroup.children[i];
@@ -834,38 +933,35 @@ export class World {
     this.portals.length = 0;
   }
 
-  // Reset all dynamic entities
+  // Reset dynamics (keep static map)
   resetDynamic(removePortals = true) {
-    // Targets
     for (const t of this.targets) {
-      this.targetGroup.remove(t);
-      t.geometry.dispose(); Array.isArray(t.material) ? t.material.forEach(m=>m.dispose()) : t.material.dispose();
+      this.targetGroup.remove(t); t.geometry.dispose();
+      Array.isArray(t.material) ? t.material.forEach(m=>m.dispose()) : t.material.dispose();
     }
     this.targets.length = 0;
-    // Enemies/bosses
+
     for (const e of this.enemies) {
-      this.enemyGroup.remove(e);
-      e.geometry.dispose(); Array.isArray(e.material) ? e.material.forEach(m=>m.dispose()) : e.material.dispose();
+      this.enemyGroup.remove(e); e.geometry.dispose();
+      Array.isArray(e.material) ? e.material.forEach(m=>m.dispose()) : e.material.dispose();
     }
     this.enemies.length = 0; this.activeBoss = null; this.activeBossKind = null;
-    // Projectiles
+
     for (const p of this.projectiles) {
       if (p.mesh) { p.mesh.geometry.dispose(); p.mesh.material.dispose(); this.projectileGroup.remove(p.mesh); }
     }
     this.projectiles.length = 0;
-    // FX
+
     for (let i = this.fxGroup.children.length - 1; i >= 0; i--) {
       const l = this.fxGroup.children[i]; l.geometry.dispose?.(); l.material.dispose?.(); this.fxGroup.remove(l);
     }
-    // Powerups
+
     for (let i = this.powerupGroup.children.length - 1; i >= 0; i--) {
       const p = this.powerupGroup.children[i]; p.geometry.dispose?.(); Array.isArray(p.material) ? p.material.forEach(m=>m.dispose()) : p.material.dispose?.(); this.powerupGroup.remove(p);
     }
-    // Gold
     for (let i = this.goldGroup.children.length - 1; i >= 0; i--) {
       const g = this.goldGroup.children[i]; g.geometry.dispose?.(); Array.isArray(g.material) ? g.material.forEach(m=>m.dispose()) : g.material.dispose?.(); this.goldGroup.remove(g);
     }
-    // Portals
     if (removePortals) this.clearPortals();
   }
 }
