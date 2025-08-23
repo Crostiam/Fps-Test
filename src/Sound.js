@@ -3,6 +3,13 @@ export class Sound {
     this.ctx = null;
     this.master = null;
     this.ambient = null;
+
+    // Music
+    this.musicGain = null;
+    this.musicParts = []; // oscillators
+    this.musicTimer = null;
+    this.musicOn = false;
+
     this.muted = false;
     this.volume = 0.8;
   }
@@ -14,6 +21,11 @@ export class Sound {
     this.master = this.ctx.createGain();
     this.master.gain.value = this.muted ? 0 : this.volume;
     this.master.connect(this.ctx.destination);
+
+    // Prebuild music gain node
+    this.musicGain = this.ctx.createGain();
+    this.musicGain.gain.value = 0.14; // independent pad level, still under master
+    this.musicGain.connect(this.master);
   }
 
   setMuted(m) {
@@ -25,7 +37,7 @@ export class Sound {
 
   setVolume(vol01) {
     this.volume = Math.max(0, Math.min(1, vol01));
-    if (!this.master || this.muted) return;
+    if (!this.master /* or muted */) return;
     this.master.gain.cancelScheduledValues(this.ctx.currentTime);
     this.master.gain.linearRampToValueAtTime(this.volume, this.ctx.currentTime + 0.05);
   }
@@ -34,6 +46,7 @@ export class Sound {
     if (this.ctx && this.ctx.state !== 'running') this.ctx.resume();
   }
 
+  // helpers
   _env(duration = 0.15, gain = 0.7) {
     const g = this.ctx.createGain();
     g.gain.value = 0;
@@ -62,6 +75,7 @@ export class Sound {
     src.buffer = buffer; src.loop = true; src.connect(dest); return src;
   }
 
+  // SFX
   playShot() {
     if (!this.ctx || this.muted) return;
     const env = this._env(0.12, 0.8);
@@ -131,6 +145,7 @@ export class Sound {
     o.stop(this.ctx.currentTime + 0.62);
   }
 
+  // Ambient bed
   startAmbient() {
     if (!this.ctx || this.muted) return;
     if (this.ambient) return;
@@ -147,5 +162,51 @@ export class Sound {
       this.ambient.disconnect();
       this.ambient = null;
     }
+  }
+
+  // Simple music pad with chord loop
+  startMusic() {
+    if (!this.ctx) return;
+    if (this.musicOn) return;
+    this.musicOn = true;
+
+    // Two-oscillator pad (root + fifth), slow chord changes
+    const rootFreqs = [196.00, 220.00, 174.61, 246.94]; // G3, A3, F3, B3
+    let idx = 0;
+
+    const makeChord = (root) => {
+      this._clearMusicParts();
+      const o1 = this._osc('sine', root, this.musicGain);
+      const o2 = this._osc('triangle', root * 1.5, this.musicGain);
+      this.musicParts = [o1, o2];
+    };
+
+    makeChord(rootFreqs[idx]);
+
+    this.musicTimer = setInterval(() => {
+      if (!this.musicOn) return;
+      idx = (idx + 1) % rootFreqs.length;
+      const target = rootFreqs[idx];
+      const now = this.ctx.currentTime;
+      for (const o of this.musicParts) {
+        const tgt = o === this.musicParts[0] ? target : target * 1.5;
+        o.frequency.cancelScheduledValues(now);
+        o.frequency.linearRampToValueAtTime(tgt, now + 2.0);
+      }
+    }, 6000);
+  }
+
+  stopMusic() {
+    this.musicOn = false;
+    if (this.musicTimer) { clearInterval(this.musicTimer); this.musicTimer = null; }
+    this._clearMusicParts();
+  }
+
+  _clearMusicParts() {
+    for (const o of this.musicParts) {
+      try { o.stop(); } catch {}
+      try { o.disconnect(); } catch {}
+    }
+    this.musicParts.length = 0;
   }
 }
