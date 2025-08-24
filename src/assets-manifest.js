@@ -4,7 +4,7 @@
 export const ASSET_MANIFEST = {
   models: {
     // First-person weapons (attach to camera)
-    'gun_pistol_fp':  '/assets/models/weapons_fp/pistol_fp.glb',
+    /*'gun_pistol_fp':  '/assets/models/weapons_fp/pistol_fp.glb',
     'gun_rifle_fp':   '/assets/models/weapons_fp/rifle_fp.glb',
     'gun_shotgun_fp': '/assets/models/weapons_fp/shotgun_fp.glb',
     'gun_smg_fp':     '/assets/models/weapons_fp/smg_fp.glb',
@@ -53,5 +53,5 @@ export const ASSET_MANIFEST = {
   audio: {
     // Optionally place custom audio here; engine falls back to built-in SFX/music
     // 'pickup_custom': '/assets/audio/pickup.wav'
-  }
+  }*/
 };
