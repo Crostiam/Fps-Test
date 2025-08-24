@@ -15,10 +15,21 @@ function segmentPointDistance(a, b, p, outClosest = null) {
   if (outClosest) outClosest.copy(closest);
   return closest.sub(p).length();
 }
+function findRootWithType(obj, types = ['enemy','boss']) {
+  let cur = obj;
+  let steps = 0;
+  while (cur && steps < 6) {
+    const t = cur.userData && cur.userData.type;
+    if (t && types.includes(t)) return cur;
+    cur = cur.parent; steps++;
+  }
+  return null;
+}
 
 export class World {
-  constructor(scene) {
+  constructor(scene, assets = null) {
     this.scene = scene;
+    this.assets = assets;
 
     this.fxGroup = new THREE.Group();
     this.projectileGroup = new THREE.Group();
@@ -67,41 +78,63 @@ export class World {
     this.scene.add(floor);
   }
 
-  // Enemies (added turret, charger)
+  // Enemies (asset-first, fallback to primitives)
   spawnEnemyAt(kind, position, scope = 'room', roomId = null) {
     const healthScale = this.difficulty;
     const speedScale = 1 + (this.floor - 1) * 0.05;
 
-    let mesh = null, h = 2.0;
-    if (kind === 'melee') {
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2.0, 10), new THREE.MeshStandardMaterial({ color: 0xe74c3c, roughness: 0.7, metalness: 0.1 }));
-    } else if (kind === 'ranged') {
-      mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(0.7, 0), new THREE.MeshStandardMaterial({ color: 0x9b59b6, roughness: 0.7, metalness: 0.1 }));
-      h = 1.4;
-    } else if (kind === 'skitter') {
-      mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), new THREE.MeshStandardMaterial({ color: 0x2ecc71, roughness: 0.6, metalness: 0.15, emissive: 0x0a3, emissiveIntensity: 0.2 }));
-      h = 1.1;
-    } else if (kind === 'brute') {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x8e44ad, roughness: 0.8, metalness: 0.08 }));
-      h = 2.4;
-    } else if (kind === 'sniper') {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.6, 0.6), new THREE.MeshStandardMaterial({ color: 0x1abc9c, roughness: 0.6, metalness: 0.2, emissive: 0x0b6b5f, emissiveIntensity: 0.25 }));
-      h = 2.6;
-    } else if (kind === 'bomber') {
-      mesh = new THREE.Mesh(new THREE.SphereGeometry(0.8, 12, 12), new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.6, metalness: 0.2, emissive: 0x6b4f0f, emissiveIntensity: 0.2 }));
-      h = 1.6;
-    } else if (kind === 'turret') {
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 1.2, 12), new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.7, metalness: 0.2 }));
-      h = 1.2;
-    } else if (kind === 'charger') {
-      mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.2, 6, 12), new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.6, metalness: 0.15 }));
-      h = 2.2;
+    let node = null;
+    if (this.assets) {
+      node = this.assets.cloneModel(`enemy_${kind}`) || null;
+    }
+    let root, heightApprox = 2.0, radiusApprox = 0.6;
+
+    if (node) {
+      root = new THREE.Group();
+      root.name = `enemy_${kind}_root`;
+      root.add(node);
+      // Center model on ground Y so its bottom sits on y=0
+      const box = new THREE.Box3().setFromObject(root);
+      const size = new THREE.Vector3(); box.getSize(size);
+      const center = new THREE.Vector3(); box.getCenter(center);
+      node.position.y -= box.min.y; // push up so min.y = 0
+      heightApprox = Math.max(1.2, size.y);
+      radiusApprox = Math.max(0.4, Math.max(size.x, size.z) * 0.5);
+      // Tag all meshes so ray hits resolve to enemy
+      root.userData.type = 'enemy';
+      root.userData.kind = kind;
+      root.traverse((o) => { if (o.isMesh) { o.userData.type = 'enemy'; o.userData.owner = root; o.castShadow = false; o.receiveShadow = false; }});
     } else {
-      mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({ color: 0xd9534f, roughness: 0.7, metalness: 0.1 }));
-      h = 2.0;
+      // Fallback primitives
+      let mesh = null, h = 2.0;
+      if (kind === 'melee') {
+        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 2.0, 10), new THREE.MeshStandardMaterial({ color: 0xe74c3c, roughness: 0.7, metalness: 0.1 }));
+      } else if (kind === 'ranged') {
+        mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(0.7, 0), new THREE.MeshStandardMaterial({ color: 0x9b59b6, roughness: 0.7, metalness: 0.1 })); h = 1.4;
+      } else if (kind === 'skitter') {
+        mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55, 0), new THREE.MeshStandardMaterial({ color: 0x2ecc71, roughness: 0.6, metalness: 0.15, emissive: 0x0a3, emissiveIntensity: 0.2 })); h = 1.1;
+      } else if (kind === 'brute') {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1.4, 2.4, 1.2), new THREE.MeshStandardMaterial({ color: 0x8e44ad, roughness: 0.8, metalness: 0.08 })); h = 2.4;
+      } else if (kind === 'sniper') {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.6, 0.6), new THREE.MeshStandardMaterial({ color: 0x1abc9c, roughness: 0.6, metalness: 0.2, emissive: 0x0b6b5f, emissiveIntensity: 0.25 })); h = 2.6;
+      } else if (kind === 'bomber') {
+        mesh = new THREE.Mesh(new THREE.SphereGeometry(0.8, 12, 12), new THREE.MeshStandardMaterial({ color: 0xf1c40f, roughness: 0.6, metalness: 0.2, emissive: 0x6b4f0f, emissiveIntensity: 0.2 })); h = 1.6;
+      } else if (kind === 'turret') {
+        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.7, 0.9, 1.2, 12), new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.7, metalness: 0.2 })); h = 1.2;
+      } else if (kind === 'charger') {
+        mesh = new THREE.Mesh(new THREE.CapsuleGeometry(0.5, 1.2, 6, 12), new THREE.MeshStandardMaterial({ color: 0xef4444, roughness: 0.6, metalness: 0.15 })); h = 2.2;
+      } else {
+        mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 2, 1), new THREE.MeshStandardMaterial({ color: 0xd9534f, roughness: 0.7, metalness: 0.1 })); h = 2.0;
+      }
+      root = mesh;
+      heightApprox = h;
+      radiusApprox = 0.6;
+      root.userData.type = 'enemy';
+      root.userData.kind = kind;
     }
 
-    mesh.position.set(position.x, h*0.5, position.z);
+    root.position.set(position.x, heightApprox * 0.5, position.z);
+
     let baseHealth = 3, baseSpeed = 3.0;
     if (kind === 'brute') baseHealth = 8, baseSpeed = 2.0;
     else if (kind === 'skitter') baseHealth = 2, baseSpeed = 4.2;
@@ -110,61 +143,78 @@ export class World {
     else if (kind === 'turret') baseHealth = 6, baseSpeed = 0.0;
     else if (kind === 'charger') baseHealth = 4, baseSpeed = 4.4;
 
-    mesh.userData = {
-      type: 'enemy',
-      kind,
-      scope,
-      roomId,
-      health: Math.round(baseHealth * healthScale),
-      speed: baseSpeed * speedScale * (0.9 + Math.random()*0.3),
-      radius: 0.6,
-      height: h,
-      shootCooldown: 0,
-      touchCd: 0,
-      phase: Math.random() * Math.PI * 2
-    };
-    this.enemyGroup.add(mesh);
-    this.enemies.push(mesh);
-    return mesh;
+    root.userData.scope = scope;
+    root.userData.roomId = roomId;
+    root.userData.health = Math.round(baseHealth * healthScale);
+    root.userData.speed = baseSpeed * speedScale * (0.9 + Math.random()*0.3);
+    root.userData.radius = radiusApprox;
+    root.userData.height = heightApprox;
+    root.userData.shootCooldown = 0;
+    root.userData.touchCd = 0;
+    root.userData.phase = Math.random() * Math.PI * 2;
+
+    this.enemyGroup.add(root);
+    this.enemies.push(root);
+    return root;
   }
 
   _spawnBossFor(kind) {
     if (this.activeBoss) return;
     const healthScale = 1 + (this.floor - 1) * 0.4;
-    let pos = null, mesh = null, pattern = null, color = 0x8b5cf6, emissive = 0x5b21b6;
-    if (kind === 'castle') {
-      pos = (this.castle && this.castle.center) ? this.castle.center.clone() : new THREE.Vector3();
-      mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 3.2, 12),
-        new THREE.MeshStandardMaterial({ color, metalness: 0.2, roughness: 0.6, emissive, emissiveIntensity: 0.2 }));
-      mesh.position.set(pos.x, 1.6, pos.z);
-      pattern = 'bursts';
-    } else if (kind === 'pyramid') {
-      pos = (this.pyramid && this.pyramid.center) ? this.pyramid.center.clone() : new THREE.Vector3();
-      mesh = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3.0, 8),
-        new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.25, roughness: 0.6, emissive: 0x92400e, emissiveIntensity: 0.25 }));
-      mesh.position.set(pos.x, 1.5, pos.z);
-      pattern = 'spread';
-    } else {
-      pos = (this.icecave && this.icecave.center) ? this.icecave.center.clone() : new THREE.Vector3();
-      mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(1.4, 0),
-        new THREE.MeshStandardMaterial({ color: 0x60a5fa, metalness: 0.3, roughness: 0.5, emissive: 0x1d4ed8, emissiveIntensity: 0.3 }));
-      mesh.position.set(pos.x, 1.4, pos.z);
-      pattern = 'rings';
+
+    let root = null;
+    if (this.assets) {
+      const key = kind === 'castle' ? 'boss_castle' : kind === 'pyramid' ? 'boss_pyramid' : 'boss_ice';
+      const m = this.assets.cloneModel(key);
+      if (m) {
+        root = new THREE.Group(); root.add(m);
+        const box = new THREE.Box3().setFromObject(root);
+        m.position.y -= box.min.y;
+      }
     }
-    mesh.userData = {
+    if (!root) {
+      // fallback simple bosses like before
+      let mesh = null;
+      if (kind === 'castle') {
+        mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 3.2, 12),
+          new THREE.MeshStandardMaterial({ color: 0x8b5cf6, metalness: 0.2, roughness: 0.6, emissive: 0x5b21b6, emissiveIntensity: 0.2 }));
+        mesh.position.y = 1.6;
+      } else if (kind === 'pyramid') {
+        mesh = new THREE.Mesh(new THREE.ConeGeometry(1.2, 3.0, 8),
+          new THREE.MeshStandardMaterial({ color: 0xd97706, metalness: 0.25, roughness: 0.6, emissive: 0x92400e, emissiveIntensity: 0.25 }));
+        mesh.position.y = 1.5;
+      } else {
+        mesh = new THREE.Mesh(new THREE.DodecahedronGeometry(1.4, 0),
+          new THREE.MeshStandardMaterial({ color: 0x60a5fa, metalness: 0.3, roughness: 0.5, emissive: 0x1d4ed8, emissiveIntensity: 0.3 }));
+        mesh.position.y = 1.4;
+      }
+      root = mesh;
+    }
+
+    // Position at provided "center" (set by RoomManager before calling)
+    const center =
+      (kind === 'castle' && this.castle && this.castle.center)
+      || (kind === 'pyramid' && this.pyramid && this.pyramid.center)
+      || (this.icecave && this.icecave.center) || new THREE.Vector3();
+    root.position.set(center.x, root.position.y || 1.5, center.z);
+
+    root.userData = {
       type: 'boss',
-      kind,
+      kind: kind,
       health: Math.round(60 * healthScale),
       speed: 2.0,
       radius: 1.0,
       height: 3.0,
       shootCooldown: 1.0,
       burstCooldown: 4.0,
-      pattern: pattern
+      pattern: kind === 'pyramid' ? 'spread' : (kind === 'ice' ? 'rings' : 'bursts')
     };
-    this.enemyGroup.add(mesh);
-    this.enemies.push(mesh);
-    this.activeBoss = mesh;
+    // Tag meshes for hit resolution
+    root.traverse((o)=>{ if (o.isMesh) { o.userData.type = 'boss'; o.userData.owner = root; } });
+
+    this.enemyGroup.add(root);
+    this.enemies.push(root);
+    this.activeBoss = root;
     this.activeBossKind = kind;
   }
 
@@ -192,6 +242,17 @@ export class World {
     }
   }
   _makePowerupMesh(kind) {
+    // Prefer a model named pickup_<kind>
+    if (this.assets) {
+      const mdl = this.assets.cloneModel(`pickup_${kind}`);
+      if (mdl) {
+        const g = new THREE.Group(); g.add(mdl);
+        const box = new THREE.Box3().setFromObject(g);
+        mdl.position.y -= box.min.y; // rest on ground
+        return g;
+      }
+    }
+    // Fallback gem
     const color = {
       health: 0x4ade80, shield: 0x60a5fa, damage: 0xf59e0b, firerate: 0xf472b6,
       weapon_rifle: 0x9ca3af, weapon_shotgun: 0xef4444, weapon_smg: 0x22d3ee,
@@ -229,12 +290,26 @@ export class World {
     m.userData = { type: 'gold', amount, ttl: 18, spin: Math.random()*Math.PI*2, vy: 2.0, vx: 0.0, vz: 0.0 };
     this.goldGroup.add(m);
   }
+
   spawnPortal(point) {
+    if (this.assets) {
+      const mdl = this.assets.cloneModel('portal');
+      if (mdl) {
+        const g = new THREE.Group(); g.add(mdl);
+        const box = new THREE.Box3().setFromObject(g);
+        mdl.position.y -= box.min.y; // rest at ground
+        g.position.copy(point); g.position.y = Math.max(g.position.y, 0.1);
+        g.userData = { type: 'portal', spin: 0 };
+        this.portalGroup.add(g);
+        this.portals.push(g);
+        return;
+      }
+    }
+    // Fallback ring
     const ringGeo = new THREE.TorusGeometry(0.9, 0.08, 8, 24);
     const ringMat = new THREE.MeshStandardMaterial({ color: 0x86efac, emissive: 0x16a34a, emissiveIntensity: 0.6, metalness: 0.2, roughness: 0.4 });
     const ring = new THREE.Mesh(ringGeo, ringMat);
-    ring.position.copy(point); ring.position.y = 1.2;
-    ring.rotation.x = Math.PI/2;
+    ring.position.copy(point); ring.position.y = 1.2; ring.rotation.x = Math.PI/2;
     ring.userData = { type: 'portal', spin: 0 };
     this.portalGroup.add(ring);
     this.portals.push(ring);
@@ -245,7 +320,9 @@ export class World {
     for (const p of this.powerupGroup.children) {
       p.userData.spin += dt;
       p.rotation.y = p.userData.spin;
-      p.position.y = 0.6 + Math.sin(p.userData.spin*2.0)*0.08;
+      if (p.position && typeof p.position.y === 'number') {
+        p.position.y = 0.6 + Math.sin(p.userData.spin*2.0)*0.08;
+      }
     }
 
     // Gold fall + magnet
@@ -291,16 +368,18 @@ export class World {
       }
     }
 
-    // Portals spin
+    // Portals spin (fallback mesh only)
     for (const r of this.portalGroup.children) {
-      r.userData.spin += dt;
-      r.rotation.z = r.userData.spin;
+      if (r.rotation && r.userData && typeof r.userData.spin === 'number') {
+        r.userData.spin += dt;
+        if (r.rotation.z !== undefined) r.rotation.z = r.userData.spin;
+      }
     }
 
-    // Enemies AI
+    // Enemies
     if (playerPos) {
       for (const e of this.enemies) {
-        const isBoss = e.userData.type === 'boss';
+        const isBoss = e.userData.type === 'boss' || e.userData.kind === 'boss';
         const kind = isBoss ? 'boss' : e.userData.kind;
 
         tmpVecA.set(playerPos.x, e.position.y, playerPos.z).sub(e.position); tmpVecA.y = 0;
@@ -380,7 +459,7 @@ export class World {
             }
           }
         } else {
-          // Boss behaviors (unchanged)
+          // Boss behaviors (same patterns)
           const patt = e.userData.pattern;
           const min = (patt === 'spread') ? 14 : (patt === 'rings') ? 16 : 18;
           const max = (patt === 'spread') ? 26 : (patt === 'rings') ? 28 : 32;
@@ -447,9 +526,14 @@ export class World {
           hit = hits[0] || null;
           if (hit) {
             this._spawnTracer(start, hit.point, 0xffe066, 0.06);
-            const kind = hit.object.userData && hit.object.userData.type ? hit.object.userData.type : null;
-            if (kind === 'enemy' || kind === 'boss') {
-              this.handleHit(hit, p.damage);
+            let obj = hit.object;
+            let type = obj.userData && obj.userData.type;
+            if (!type) {
+              const root = findRootWithType(obj);
+              if (root) obj = root, type = root.userData.type;
+            }
+            if (type === 'enemy' || type === 'boss') {
+              this.handleHit({ object: obj, point: hit.point }, p.damage);
             }
             this._removeProjectileAt(i);
             continue;
@@ -523,21 +607,38 @@ export class World {
   }
 
   handleHit(intersection, damage = 1) {
-    const obj = intersection.object;
-    const type = obj.userData && obj.userData.type ? obj.userData.type : null;
+    let obj = intersection.object;
+    let type = obj.userData && obj.userData.type ? obj.userData.type : null;
+    if (!type) {
+      const root = findRootWithType(obj);
+      if (root) { obj = root; type = root.userData.type; }
+    }
 
     if (type === 'enemy') {
       obj.userData.health -= damage;
-      const mat = obj.material; if (mat && mat.color) {
-        const oldColor = mat.color.clone();
-        mat.color.setHex(0xff7770); setTimeout(() => { if (mat && mat.color) mat.color.copy(oldColor); }, 80);
-      }
+      // flash first child mesh if any
+      let flashed = false;
+      obj.traverse((m)=>{
+        if (!flashed && m.isMesh && m.material && m.material.color) {
+          const old = m.material.color.clone(); m.material.color.setHex(0xff7770);
+          setTimeout(()=>{ if (m.material && m.material.color) m.material.color.copy(old); }, 80);
+          flashed = true;
+        }
+      });
       if (obj.userData.health <= 0) {
         for (let i=0;i<3;i++) this.spawnGold(intersection.point.clone().add(new THREE.Vector3((Math.random()-0.5)*0.8, 0, (Math.random()-0.5)*0.8)), 2);
         this.enemyGroup.remove(obj);
         this.enemies = this.enemies.filter(e => e !== obj);
-        if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
-        if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose()); else if (obj.material.dispose) obj.material.dispose(); }
+        // dispose meshes
+        obj.traverse((m)=>{
+          if (m.isMesh) {
+            if (m.geometry && m.geometry.dispose) m.geometry.dispose();
+            if (m.material) {
+              if (Array.isArray(m.material)) m.material.forEach(mat=>mat && mat.dispose && mat.dispose());
+              else if (m.material.dispose) m.material.dispose();
+            }
+          }
+        });
         return { removed: true, kind: 'enemy', score: 3 };
       }
       return { removed: false, kind: 'enemy', score: 0 };
@@ -545,18 +646,28 @@ export class World {
 
     if (type === 'boss') {
       obj.userData.health -= damage;
-      const mat = obj.material;
-      if (mat) {
-        const oldE = mat.emissiveIntensity || 0;
-        mat.emissiveIntensity = 0.5;
-        setTimeout(() => { if (mat) mat.emissiveIntensity = oldE; }, 80);
-      }
+      let flashed = false;
+      obj.traverse((m)=>{
+        if (!flashed && m.isMesh && m.material && 'emissiveIntensity' in m.material) {
+          const old = m.material.emissiveIntensity || 0;
+          m.material.emissiveIntensity = 0.5;
+          setTimeout(()=>{ if (m.material) m.material.emissiveIntensity = old; }, 80);
+          flashed = true;
+        }
+      });
       if (obj.userData.health <= 0) {
         for (let i=0;i<20;i++) this.spawnGold(intersection.point.clone().add(new THREE.Vector3((Math.random()-0.5)*2.2, 0, (Math.random()-0.5)*2.2)), 3);
         this.enemyGroup.remove(obj);
         this.enemies = this.enemies.filter(e => e !== obj);
-        if (obj.geometry && obj.geometry.dispose) obj.geometry.dispose();
-        if (obj.material) { if (Array.isArray(obj.material)) obj.material.forEach(m=>m && m.dispose && m.dispose()); else if (obj.material.dispose) obj.material.dispose(); }
+        obj.traverse((m)=>{
+          if (m.isMesh) {
+            if (m.geometry && m.geometry.dispose) m.geometry.dispose();
+            if (m.material) {
+              if (Array.isArray(m.material)) m.material.forEach(mat=>mat && mat.dispose && mat.dispose());
+              else if (m.material.dispose) m.material.dispose();
+            }
+          }
+        });
         this.activeBoss = null; this.activeBossKind = null;
         return { removed: true, kind: 'boss', score: 20 };
       }
@@ -604,7 +715,9 @@ export class World {
 
   checkPortalEntry(playerPos) {
     for (const r of this.portalGroup.children) {
-      if (r.position.distanceTo(playerPos) < 1.6) return true;
+      const pos = r.position || (r.children && r.children[0] && r.children[0].position) || null;
+      if (!pos) continue;
+      if (pos.distanceTo(playerPos) < 1.6) return true;
     }
     return false;
   }
@@ -612,8 +725,15 @@ export class World {
   clearPortals() {
     for (let i=this.portalGroup.children.length-1;i>=0;i--){
       const r = this.portalGroup.children[i];
-      if (r.geometry && r.geometry.dispose) r.geometry.dispose();
-      if (r.material) { if (Array.isArray(r.material)) r.material.forEach(m=>m && m.dispose && m.dispose()); else if (r.material.dispose) r.material.dispose(); }
+      r.traverse?.((m)=>{
+        if (m.isMesh) {
+          if (m.geometry && m.geometry.dispose) m.geometry.dispose();
+          if (m.material) {
+            if (Array.isArray(m.material)) m.material.forEach(mat=>mat && mat.dispose && mat.dispose());
+            else if (m.material.dispose) m.material.dispose();
+          }
+        }
+      });
       this.portalGroup.remove(r);
     }
     this.portals.length = 0;
@@ -622,8 +742,15 @@ export class World {
   resetDynamic(clearPortalsToo = true) {
     for (const e of this.enemies) {
       this.enemyGroup.remove(e);
-      if (e.geometry && e.geometry.dispose) e.geometry.dispose();
-      if (e.material) { if (Array.isArray(e.material)) e.material.forEach(m=>m && m.dispose && m.dispose()); else if (e.material.dispose) e.material.dispose(); }
+      e.traverse?.((m)=>{
+        if (m.isMesh) {
+          if (m.geometry && m.geometry.dispose) m.geometry.dispose();
+          if (m.material) {
+            if (Array.isArray(m.material)) m.material.forEach(mat=>mat && mat.dispose && mat.dispose());
+            else if (m.material.dispose) m.material.dispose();
+          }
+        }
+      });
     }
     this.enemies.length = 0; this.activeBoss = null; this.activeBossKind = null;
 
@@ -645,8 +772,15 @@ export class World {
 
     for (let i = this.powerupGroup.children.length - 1; i >= 0; i--) {
       const p = this.powerupGroup.children[i];
-      if (p.geometry && p.geometry.dispose) p.geometry.dispose();
-      if (p.material) { if (Array.isArray(p.material)) p.material.forEach(m=>m && m.dispose && m.dispose()); else if (p.material.dispose) p.material.dispose(); }
+      p.traverse?.((m)=>{
+        if (m.isMesh) {
+          if (m.geometry && m.geometry.dispose) m.geometry.dispose();
+          if (m.material) {
+            if (Array.isArray(m.material)) m.material.forEach(mat=>mat && mat.dispose && mat.dispose());
+            else if (m.material.dispose) m.material.dispose();
+          }
+        }
+      });
       this.powerupGroup.remove(p);
     }
 
