@@ -1,6 +1,11 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  // Use relative paths so GitHub Pages works at /<repo>/
-  base: './'
+  // Let esbuild output modern syntax that supports top-level await
+  build: {
+    target: 'esnext',
+  },
+  esbuild: {
+    target: 'esnext',
+  },
 });
