@@ -69,21 +69,44 @@ if (volumeSlider) sound.setVolume((Number(volumeSlider.value) || 80) / 100);
 sound.resume(); sound.startAmbient(); sound.startMusic();
 function setAllVolume(v01) {
   sound.setVolume(v01);
-  const val = Math.round(v01*100);
+  const val = Math.round(v01 * 100);
   if (volumeSlider) volumeSlider.value = String(val);
   if (volumeSliderPause) volumeSliderPause.value = String(val);
 }
-if (volumeSlider) volumeSlider.addEventListener('input', () => setAllVolume(Number(volumeSlider.value)/100));
-if (volumeSliderPause) volumeSliderPause.addEventListener('input', () => setAllVolume(Number(volumeSliderPause.value)/100));
+if (volumeSlider) volumeSlider.addEventListener('input', () => setAllVolume(Number(volumeSlider.value) / 100));
+if (volumeSliderPause) volumeSliderPause.addEventListener('input', () => setAllVolume(Number(volumeSliderPause.value) / 100));
 
-// Assets: preload manifest (safe if empty)
-const assets = new Assets(sound.ctx);
-await assets.loadAll(ASSET_MANIFEST);
+// --- Asset and world/game setup now in async bootstrap ---
+let assets, world, rooms;
 
-// World + Rooms (asset-aware)
-const world = new World(scene, assets);
-const rooms = new RoomManager(world, null, (kind)=>applyPickup(kind), assets);
-rooms.setTeleport((dest)=>controls.getObject().position.copy(dest));
+(async function bootstrap() {
+  assets = new Assets(sound.ctx);
+  await assets.loadAll(ASSET_MANIFEST);
+
+  world = new World(scene, assets);
+  rooms = new RoomManager(world, null, (kind) => applyPickup(kind), assets);
+  rooms.setTeleport((dest) => controls.getObject().position.copy(dest));
+
+  // Refs to world/rooms now safe!
+  world.playerHeight = player.height;
+
+  buildGunModels();
+
+  updateWeaponsUI(); showOnlyGun(currentWeaponKey);
+
+  // UI & run logic
+  startRunBtn && startRunBtn.addEventListener('click', () => startRun());
+  resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
+  restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
+  toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
+  startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
+
+  if (home) home.style.display = 'grid';
+
+  // Start render loop after everything is ready
+  resize();
+  requestAnimationFrame(loop);
+})();
 
 // Rays
 const groundRay = new THREE.Raycaster();
@@ -111,23 +134,22 @@ const player = {
   maxHealth: 100,
   health: 100
 };
-world.playerHeight = player.height;
 
 // Weapons
 const weapons = {
   pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0.6, damage: 6, magSize: Infinity, reload: 0, auto: false },
-  rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
-  shotgun:{ name: 'Shotgun',fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2, auto: false },
-  smg:    { name: 'SMG',    fireRate: 13, projSpeed: 80, pellets: 1, spreadDeg: 2.0, damage: 4, magSize: 40, reload: 1.8, auto: true }
+  rifle: { name: 'Rifle', fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
+  shotgun: { name: 'Shotgun', fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2, auto: false },
+  smg: { name: 'SMG', fireRate: 13, projSpeed: 80, pellets: 1, spreadDeg: 2.0, damage: 4, magSize: 40, reload: 1.8, auto: true }
 };
 let unlockedWeapons = new Set(['pistol']);
 let currentWeaponKey = 'pistol';
 let nextFireTime = 0;
 const ammo = {
   pistol: { mag: Infinity, reserve: Infinity },
-  rifle:  { mag: 30, reserve: 90 },
-  shotgun:{ mag: 6, reserve: 24 },
-  smg:    { mag: 40, reserve: 160 }
+  rifle: { mag: 30, reserve: 90 },
+  shotgun: { mag: 6, reserve: 24 },
+  smg: { mag: 40, reserve: 160 }
 };
 let reloading = false;
 let reloadTimeLeft = 0;
@@ -179,14 +201,13 @@ function buildGunModels() {
 
   function buildGun(key, assetKey, pose, fallbackBuilder) {
     const g = guns[key];
-    const mdl = assets.cloneModel(assetKey);
+    const mdl = assets.cloneModel && assets.cloneModel(assetKey);
     if (mdl) { g.add(mdl); }
     else { fallbackBuilder(); }
     g.position.set(...pose.pos); g.rotation.set(...pose.rot);
     camera.add(g);
   }
 }
-buildGunModels();
 
 // Muzzle (primitive; you can swap to a model if you add one)
 const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe066 }));
@@ -211,7 +232,6 @@ function updateWeaponsUI() {
   if (ammoShotgun) ammoShotgun.textContent = `${ammo.shotgun.mag} / ${ammo.shotgun.reserve}`;
   if (ammoSMG) ammoSMG.textContent = `${ammo.smg.mag} / ${ammo.smg.reserve}`;
 }
-updateWeaponsUI(); showOnlyGun(currentWeaponKey);
 
 // Start/end run (keep your Home/Death UI as before)
 function startRun() {
@@ -244,13 +264,6 @@ function die() {
   if (document.exitPointerLock) document.exitPointerLock();
   if (deathOverlay) deathOverlay.style.display = 'grid';
 }
-if (home) home.style.display = 'grid';
-
-startRunBtn && startRunBtn.addEventListener('click', () => startRun());
-resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
-restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
-toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
-startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
 
 // Pause
 let isPaused = false;
@@ -275,7 +288,7 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Digit2') { if (unlockedWeapons.has('rifle')) currentWeaponKey = 'rifle'; }
     if (e.code === 'Digit3') { if (unlockedWeapons.has('shotgun')) currentWeaponKey = 'shotgun'; }
     if (e.code === 'Digit4') { if (unlockedWeapons.has('smg')) currentWeaponKey = 'smg'; }
-    if (e.code === 'KeyR') tryReload();
+    if (e.code === 'KeyR') tryReload && tryReload();
     updateWeaponsUI(); showOnlyGun(currentWeaponKey);
   }
 });
@@ -285,4 +298,8 @@ window.addEventListener('keydown', (e) => {
 
 function resize() { const w = window.innerWidth, h = window.innerHeight; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); }
 window.addEventListener('resize', resize);
-requestAnimationFrame(function loop(){ renderer.render(scene, camera); requestAnimationFrame(loop); });
+
+function loop() {
+  renderer.render(scene, camera);
+  requestAnimationFrame(loop);
+}
