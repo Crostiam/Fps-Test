@@ -225,7 +225,8 @@ function renderShop() {
   parts.push(`<div class="panel">`);
   parts.push(`<h2 style="margin:0 0 8px 0;">Upgrades Shop</h2>`);
   parts.push(`<div style="color:#cbd5e1;font-size:13px;margin-bottom:8px;">Wallet: <strong>${meta.wallet}</strong> gold</div>`);
-  parts.push(`<div class="grid" style="grid-template-columns: repeat(1, minmax(280px, 360px));">`);
+  // CHANGED: make the grid 2 columns instead of 1
+  parts.push(`<div class="grid" style="grid-template-columns: repeat(2, minmax(280px, 360px));">`);
   for (const it of items) {
     const id = `buy_${it.key}`;
     const disabled = (it.type === 'boolean' && it.owned) || meta.wallet < it.cost;
