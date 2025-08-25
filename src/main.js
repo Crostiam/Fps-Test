@@ -89,6 +89,7 @@ renderer.domElement.addEventListener('click', () => {
 const input = new Input();
 let interactPressed = false;
 let mouseDownLeft = false;
+let allowFallbackMove = false; // <== Added for fallback movement guard
 window.addEventListener('keydown', (e) => { if (e.code === 'KeyE') interactPressed = true; });
 window.addEventListener('mousedown', (e) => {
   if (state !== State.RUN || isPaused) return;
@@ -249,11 +250,11 @@ function renderShop() {
       cost: costLinear(70, 60, u.speedLvl), type: 'level'
     },
     {
-      key: 'startRifle', name: 'Start with Rifle', desc: `Begin each run with Rifle unlocked (30/90 ammo)`,
+      key: 'startRifle', name: 'Start with Rifle', desc: `Begin each run with Rifle unlocked (30/90 ammo)` ,
       owned: u.startRifle, cost: 300, type: 'boolean'
     },
     {
-      key: 'startShotgun', name: 'Start with Shotgun', desc: `Begin each run with Shotgun unlocked (6/24 ammo)`,
+      key: 'startShotgun', name: 'Start with Shotgun', desc: `Begin each run with Shotgun unlocked (6/24 ammo)` ,
       owned: u.startShotgun, cost: 350, type: 'boolean'
     }
   ];
@@ -355,7 +356,7 @@ function buildGunModels() {
     const g = guns.rifle;
     const receiver = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.28, 1.0), new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.55, roughness: 0.25 }));
     receiver.position.set(0, 0.02, 0.35);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.7, 16), new THREE.MeshStandardMaterial({ color: 0x9aa2ff, emissive: 0x343cff, emissiveIntensity: 0.35, metalness: 0.8, roughness: 0.2 }));
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.7, 16), new THREE.MeshStandardMaterial({ color: 0x9aa2ff, emissive: 0x343cff, emissiveIntensity: 0.35, metalness: 0.8, roughness: 0.25 }));
     barrel.rotation.z = Math.PI / 2; barrel.position.set(0.33, 0.03, 0.7);
     const handguard = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.24, 0.45), new THREE.MeshStandardMaterial({ color: 0x2d3340, metalness: 0.55, roughness: 0.25 }));
     handguard.position.set(0.16, -0.02, 0.78);
@@ -375,7 +376,7 @@ function buildGunModels() {
     const g = guns.smg;
     const body = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.25, 0.8), new THREE.MeshStandardMaterial({ color: 0x3a4758, metalness: 0.55, roughness: 0.3 }));
     body.position.set(0.02, 0.02, 0.32);
-    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.55, 12), new THREE.MeshStandardMaterial({ color: 0x5eead4, emissive: 0x14b8a6, emissiveIntensity: 0.3, metalness: 0.8, roughness: 0.2 }));
+    const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.55, 12), new THREE.MeshStandardMaterial({ color: 0x5eead4, emissive: 0x14b8a6, emissiveIntensity: 0.3, metalness: 0.8, roughness: 0.26 }));
     barrel.rotation.z = Math.PI / 2; barrel.position.set(0.3, 0.02, 0.6);
     g.add(body, barrel);
   });
@@ -573,6 +574,26 @@ function tryShoot() {
   muzzle.visible = true;
   setTimeout(() => { muzzle.visible = false; }, 40);
 
+  // ---- CALL world.fireShot if available ----
+  if (world && typeof world.fireShot === 'function') {
+    const origin = new THREE.Vector3();
+    camera.getWorldPosition(origin);
+    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion).normalize();
+
+    const wdef = weapons[currentWeaponKey] || {};
+    world.fireShot({
+      origin,
+      dir,
+      weapon: currentWeaponKey,
+      pellets: wdef.pellets ?? 1,
+      spreadDeg: wdef.spreadDeg ?? 0,
+      projSpeed: wdef.projSpeed ?? 200,
+      damage: (wdef.damage ?? 1) * (mods.damageMult || 1),
+      critChance: mods.critChance || 0
+    });
+  }
+  // ---- END ----
+
   if (sound.playShoot) sound.playShoot(currentWeaponKey);
 }
 
@@ -594,8 +615,24 @@ function loop() {
   if (world && typeof world.update === 'function') world.update(dt, { state, isPaused, player, input, controls, mods, spawnProtectedTime });
   if (rooms && typeof rooms.update === 'function') rooms.update(dt);
 
-  // Minimal local movement fallback
-  if (state === State.RUN && !isPaused) {
+  // --- AUTOFIRE support: call tryShoot while holding LMB for auto weapons ---
+  if (state === State.RUN && !isPaused && mouseDownLeft) {
+    const w = weapons[currentWeaponKey];
+    if (w && w.auto) {
+      tryShoot();
+    }
+  }
+
+  // --- INTERACT: consume interactPressed (E) in loop ---
+  if (state === State.RUN && !isPaused && interactPressed) {
+    if (rooms && typeof rooms.tryInteract === 'function') {
+      rooms.tryInteract();
+    }
+    interactPressed = false;
+  }
+
+  // Minimal local movement fallback (guarded by allowFallbackMove)
+  if (state === State.RUN && !isPaused && allowFallbackMove) {
     const moveSpeed = (player.baseSpeed * (1 + (mods.haste || 0))) * dt;
     let forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
     let right = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
