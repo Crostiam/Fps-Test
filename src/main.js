@@ -7,11 +7,15 @@ import { RoomManager } from './RoomManager.js';
 import { Assets } from './Assets.js';
 import { ASSET_MANIFEST } from './assets-manifest.js';
 
+// ==============================
+// DOM
+// ==============================
 const app = document.getElementById('app');
 const hud = document.getElementById('hud');
 const home = document.getElementById('home');
 const pauseOverlay = document.getElementById('pauseOverlay');
 const deathOverlay = document.getElementById('death');
+const deathStats = document.getElementById('deathStats');
 const resumeBtn = document.getElementById('resumeBtn');
 const restartBtn = document.getElementById('restartBtn');
 const toHomeBtn = document.getElementById('toHomeBtn');
@@ -33,6 +37,11 @@ const ammoRifle = document.getElementById('ammoRifle');
 const ammoShotgun = document.getElementById('ammoShotgun');
 const ammoSMG = document.getElementById('ammoSMG');
 
+const shopEl = document.getElementById('shop');
+
+// ==============================
+// Three.js basics
+// ==============================
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance', alpha: false });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
 renderer.setSize(window.innerWidth, window.innerHeight);
@@ -52,6 +61,9 @@ camera.position.set(0, 1.7, 0);
 const controls = new PointerLockControls(camera, renderer.domElement);
 scene.add(controls.getObject());
 
+// ==============================
+// Input
+// ==============================
 const input = new Input();
 let interactPressed = false;
 let mouseDownLeft = false;
@@ -62,7 +74,9 @@ window.addEventListener('mousedown', (e) => {
 });
 window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDownLeft = false; });
 
+// ==============================
 // Sound
+// ==============================
 const sound = new Sound();
 sound.init();
 if (volumeSlider) sound.setVolume((Number(volumeSlider.value) || 80) / 100);
@@ -76,89 +90,219 @@ function setAllVolume(v01) {
 if (volumeSlider) volumeSlider.addEventListener('input', () => setAllVolume(Number(volumeSlider.value) / 100));
 if (volumeSliderPause) volumeSliderPause.addEventListener('input', () => setAllVolume(Number(volumeSliderPause.value) / 100));
 
-// --- Asset and world/game setup now in async bootstrap ---
-let assets, world, rooms;
-
-(async function bootstrap() {
-  assets = new Assets(sound.ctx);
-  await assets.loadAll(ASSET_MANIFEST);
-
-  world = new World(scene, assets);
-  rooms = new RoomManager(world, null, (kind) => applyPickup(kind), assets);
-  rooms.setTeleport((dest) => controls.getObject().position.copy(dest));
-
-  // Refs to world/rooms now safe!
-  world.playerHeight = player.height;
-
-  buildGunModels();
-
-  updateWeaponsUI(); showOnlyGun(currentWeaponKey);
-
-  // UI & run logic
-  startRunBtn && startRunBtn.addEventListener('click', () => startRun());
-  resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
-  restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
-  toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
-  startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
-
-  if (home) home.style.display = 'grid';
-
-  // Start render loop after everything is ready
-  resize();
-  requestAnimationFrame(loop);
-})();
+// ==============================
+// Globals filled in bootstrap
+// ==============================
+let assets;
+let world;
+let rooms;
 
 // Rays
 const groundRay = new THREE.Raycaster();
 
+// ==============================
 // State
+// ==============================
 const State = { HOME: 'home', RUN: 'run', PAUSE: 'pause', DEAD: 'dead' };
 let state = State.HOME;
-
-// Meta profile (kept from previous version, omitted here for brevity) — you can paste your shop code back in.
 
 // Run state
 let depth = 1;
 let runGold = 0;
 let spawnProtectedTime = 0;
 
+// ==============================
+// Player
+// ==============================
+const BASE_MAX_HEALTH = 100;
+const BASE_SPEED = 6.2;
+
 const player = {
   velocity: new THREE.Vector3(0, 0, 0),
-  baseSpeed: 6.2,
+  baseSpeed: BASE_SPEED,
   sprintMult: 1.6,
   gravity: 20.0,
   jumpSpeed: 7.0,
   onGround: false,
   radius: 0.6,
   height: 1.7,
-  maxHealth: 100,
-  health: 100
+  maxHealth: BASE_MAX_HEALTH,
+  health: BASE_MAX_HEALTH
 };
 
+// ==============================
 // Weapons
+// ==============================
 const weapons = {
   pistol: { name: 'Pistol', fireRate: 4, projSpeed: 70, pellets: 1, spreadDeg: 0.6, damage: 6, magSize: Infinity, reload: 0, auto: false },
-  rifle: { name: 'Rifle', fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
-  shotgun: { name: 'Shotgun', fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2, auto: false },
-  smg: { name: 'SMG', fireRate: 13, projSpeed: 80, pellets: 1, spreadDeg: 2.0, damage: 4, magSize: 40, reload: 1.8, auto: true }
+  rifle:  { name: 'Rifle',  fireRate: 9, projSpeed: 85, pellets: 1, spreadDeg: 1.2, damage: 5, magSize: 30, reload: 1.5, auto: true },
+  shotgun:{ name: 'Shotgun',fireRate: 1.2, projSpeed: 65, pellets: 7, spreadDeg: 7.5, damage: 3, magSize: 6, reload: 2.2, auto: false },
+  smg:    { name: 'SMG',    fireRate: 13, projSpeed: 80, pellets: 1, spreadDeg: 2.0, damage: 4, magSize: 40, reload: 1.8, auto: true }
 };
 let unlockedWeapons = new Set(['pistol']);
 let currentWeaponKey = 'pistol';
 let nextFireTime = 0;
 const ammo = {
   pistol: { mag: Infinity, reserve: Infinity },
-  rifle: { mag: 30, reserve: 90 },
-  shotgun: { mag: 6, reserve: 24 },
-  smg: { mag: 40, reserve: 160 }
+  rifle:  { mag: 30, reserve: 90 },
+  shotgun:{ mag: 6, reserve: 24 },
+  smg:    { mag: 40, reserve: 160 }
 };
 let reloading = false;
 let reloadTimeLeft = 0;
 
-// Mods
+// ==============================
+// Mods (temporary in-run). Permanent upgrades are applied at run start.
+// ==============================
 const mods = { damageMult: 1.0, fireRateMult: 1.0, shieldTime: 0, critChance: 0.0, armorMult: 1.0, haste: 0.0 };
 const modTimers = { damageMult: 0, fireRateMult: 0, critChance: 0, armorMult: 0, haste: 0 };
 
-// First-person weapons: try assets first, fallback to primitives
+// ==============================
+// SHOP (Meta progression; persists in localStorage)
+// ==============================
+const LS_KEY = 'fps_meta_v1';
+const meta = loadMeta();
+
+function loadMeta() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch {}
+  return {
+    wallet: 0,
+    upgrades: {
+      maxhpLvl: 0,       // +10 Max HP per level
+      dmgLvl: 0,         // +6% damage per level
+      firerateLvl: 0,    // +6% fire rate per level
+      speedLvl: 0,       // +4% move speed per level
+      startRifle: false, // start with Rifle
+      startShotgun: false// start with Shotgun
+    }
+  };
+}
+function saveMeta() {
+  try { localStorage.setItem(LS_KEY, JSON.stringify(meta)); } catch {}
+}
+function gold(cost) { return Math.max(0, Math.floor(cost)); }
+function costLinear(base, step, lvl) { return gold(base + step * lvl); }
+
+function renderShop() {
+  if (!shopEl) return;
+  const u = meta.upgrades;
+
+  const items = [
+    {
+      key: 'maxhpLvl', name: 'Max Health +10', desc: `Increase max HP by 10 (stacking)`,
+      level: u.maxhpLvl, effect: `Current: ${BASE_MAX_HEALTH + u.maxhpLvl*10} HP`,
+      cost: costLinear(60, 60, u.maxhpLvl), type: 'level'
+    },
+    {
+      key: 'dmgLvl', name: 'Damage +6%', desc: `Increase weapon damage by 6% (stacking)`,
+      level: u.dmgLvl, effect: `Current: ${(100*(1+0.06*u.dmgLvl)).toFixed(0)}%`,
+      cost: costLinear(80, 70, u.dmgLvl), type: 'level'
+    },
+    {
+      key: 'firerateLvl', name: 'Fire Rate +6%', desc: `Increase fire rate by 6% (stacking)`,
+      level: u.firerateLvl, effect: `Current: ${(100*(1+0.06*u.firerateLvl)).toFixed(0)}%`,
+      cost: costLinear(80, 70, u.firerateLvl), type: 'level'
+    },
+    {
+      key: 'speedLvl', name: 'Speed +4%', desc: `Increase move speed by 4% (stacking)`,
+      level: u.speedLvl, effect: `Current: ${(100*(1+0.04*u.speedLvl)).toFixed(0)}%`,
+      cost: costLinear(70, 60, u.speedLvl), type: 'level'
+    },
+    {
+      key: 'startRifle', name: 'Start with Rifle', desc: `Begin each run with Rifle unlocked (30/90 ammo)`,
+      owned: u.startRifle, cost: 300, type: 'boolean'
+    },
+    {
+      key: 'startShotgun', name: 'Start with Shotgun', desc: `Begin each run with Shotgun unlocked (6/24 ammo)`,
+      owned: u.startShotgun, cost: 350, type: 'boolean'
+    }
+  ];
+
+  const parts = [];
+  parts.push(`<div class="panel">`);
+  parts.push(`<h2 style="margin:0 0 8px 0;">Upgrades Shop</h2>`);
+  parts.push(`<div style="color:#cbd5e1;font-size:13px;margin-bottom:8px;">Wallet: <strong>${meta.wallet}</strong> gold</div>`);
+  parts.push(`<div class="grid" style="grid-template-columns: repeat(1, minmax(280px, 360px));">`);
+  for (const it of items) {
+    const id = `buy_${it.key}`;
+    const disabled = (it.type === 'boolean' && it.owned) || meta.wallet < it.cost;
+    const ownedStr = it.type === 'boolean' ? (it.owned ? `Owned` : `Not owned`) : `Level ${it.level}`;
+    const effectStr = it.effect ? `<div style="font-size:12px;color:#94a3b8;">${it.effect}</div>` : '';
+    parts.push(`
+      <div style="border:1px solid #2e3040;padding:10px;border-radius:10px;text-align:left;background:#0f1320;">
+        <div style="font-weight:700;color:#e2e8f0;">${it.name}</div>
+        <div style="font-size:12px;color:#a8b1c3;margin:4px 0;">${it.desc}</div>
+        ${effectStr}
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;">
+          <div style="font-size:12px;color:#cbd5e1;">${ownedStr} • Cost: ${it.cost}</div>
+          <button id="${id}" class="btn ${disabled ? 'secondary' : ''}" ${disabled ? 'disabled' : ''} style="margin:0;">Buy</button>
+        </div>
+      </div>
+    `);
+  }
+  parts.push(`</div></div>`);
+  shopEl.innerHTML = parts.join('');
+
+  // Wire buttons
+  for (const it of items) {
+    const btn = document.getElementById(`buy_${it.key}`);
+    if (!btn) continue;
+    btn.addEventListener('click', () => {
+      if (it.type === 'level') {
+        const cost = it.cost;
+        if (meta.wallet < cost) return;
+        meta.wallet -= cost;
+        meta.upgrades[it.key] = (meta.upgrades[it.key] || 0) + 1;
+      } else {
+        const cost = it.cost;
+        if (meta.wallet < cost) return;
+        if (meta.upgrades[it.key]) return;
+        meta.wallet -= cost;
+        meta.upgrades[it.key] = true;
+      }
+      saveMeta();
+      renderShop();
+    });
+  }
+}
+
+// Apply meta to current run (called in startRun)
+function applyMetaToRun() {
+  const u = meta.upgrades;
+  // Reset to base then apply
+  player.maxHealth = BASE_MAX_HEALTH + (u.maxhpLvl || 0) * 10;
+  player.health = player.maxHealth;
+  player.baseSpeed = BASE_SPEED * (1 + 0.04 * (u.speedLvl || 0));
+
+  // Permanent multipliers apply to temporary mods baseline
+  mods.damageMult = 1.0 * (1 + 0.06 * (u.dmgLvl || 0));
+  mods.fireRateMult = 1.0 * (1 + 0.06 * (u.firerateLvl || 0));
+
+  // Starting weapons
+  unlockedWeapons = new Set(['pistol']);
+  if (u.startRifle) unlockedWeapons.add('rifle');
+  if (u.startShotgun) unlockedWeapons.add('shotgun');
+  // Keep SMG locked by default; can be unlocked in run via gameplay
+
+  // Ensure starting ammo reasonable
+  if (u.startRifle) { ammo.rifle.mag = 30; ammo.rifle.reserve = Math.max(ammo.rifle.reserve, 90); }
+  if (u.startShotgun) { ammo.shotgun.mag = 6; ammo.shotgun.reserve = Math.max(ammo.shotgun.reserve, 24); }
+
+  // Keep selected weapon sensible
+  if (!unlockedWeapons.has(currentWeaponKey)) currentWeaponKey = 'pistol';
+  updateWeaponsUI();
+  showOnlyGun(currentWeaponKey);
+}
+
+// Helper for awarding gold during the run (call this from gameplay when collecting)
+function addGold(n) { runGold += Math.max(0, Math.floor(n)); }
+
+// ==============================
+// First-person weapons: assets (if any) or primitives
+// ==============================
 const guns = { pistol: new THREE.Group(), rifle: new THREE.Group(), shotgun: new THREE.Group(), smg: new THREE.Group() };
 let recoilT = 0;
 function buildGunModels() {
@@ -201,7 +345,7 @@ function buildGunModels() {
 
   function buildGun(key, assetKey, pose, fallbackBuilder) {
     const g = guns[key];
-    const mdl = assets.cloneModel && assets.cloneModel(assetKey);
+    const mdl = assets && assets.cloneModel ? assets.cloneModel(assetKey) : null;
     if (mdl) { g.add(mdl); }
     else { fallbackBuilder(); }
     g.position.set(...pose.pos); g.rotation.set(...pose.rot);
@@ -209,7 +353,7 @@ function buildGunModels() {
   }
 }
 
-// Muzzle (primitive; you can swap to a model if you add one)
+// Muzzle flash (primitive)
 const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), new THREE.MeshBasicMaterial({ color: 0xffe066 }));
 muzzle.visible = false; muzzle.position.set(0.45, -0.32, 0.05); camera.add(muzzle);
 
@@ -233,39 +377,9 @@ function updateWeaponsUI() {
   if (ammoSMG) ammoSMG.textContent = `${ammo.smg.mag} / ${ammo.smg.reserve}`;
 }
 
-// Start/end run (keep your Home/Death UI as before)
-function startRun() {
-  state = State.RUN;
-  runGold = 0;
-  depth = 1;
-
-  world.startFloor(depth);
-  rooms.generateNewFloor(depth);
-
-  controls.getObject().position.set(0, player.height, 0);
-  spawnProtectedTime = 1.2; if (protectedBadge) protectedBadge.style.display = 'inline-block';
-
-  sound.resume(); sound.startAmbient(); sound.startMusic();
-  if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
-
-  if (home) home.style.display = 'none';
-  if (deathOverlay) deathOverlay.style.display = 'none';
-  updateWeaponsUI(); showOnlyGun(currentWeaponKey);
-}
-function endRunToHome() {
-  if (home) home.style.display = 'grid';
-  if (pauseOverlay) pauseOverlay.style.display = 'none';
-  if (deathOverlay) deathOverlay.style.display = 'none';
-  state = State.HOME;
-}
-function die() {
-  if (state !== State.RUN) return;
-  state = State.DEAD;
-  if (document.exitPointerLock) document.exitPointerLock();
-  if (deathOverlay) deathOverlay.style.display = 'grid';
-}
-
+// ==============================
 // Pause
+// ==============================
 let isPaused = false;
 function setPaused(p) {
   if (state !== State.RUN && !(state === State.PAUSE && !p)) return;
@@ -288,18 +402,195 @@ window.addEventListener('keydown', (e) => {
     if (e.code === 'Digit2') { if (unlockedWeapons.has('rifle')) currentWeaponKey = 'rifle'; }
     if (e.code === 'Digit3') { if (unlockedWeapons.has('shotgun')) currentWeaponKey = 'shotgun'; }
     if (e.code === 'Digit4') { if (unlockedWeapons.has('smg')) currentWeaponKey = 'smg'; }
-    if (e.code === 'KeyR') tryReload && tryReload();
+    if (e.code === 'KeyR') tryReload();
     updateWeaponsUI(); showOnlyGun(currentWeaponKey);
   }
 });
 
-// Shooting and movement (same as your latest; omitted here for brevity). Keep your existing tryShoot, updateControls, etc.
-// Ensure you still tick mods.shieldTime down each frame as we fixed earlier.
+// ==============================
+// START/END RUN
+// ==============================
+function startRun() {
+  state = State.RUN;
+  runGold = 0;
+  depth = 1;
 
-function resize() { const w = window.innerWidth, h = window.innerHeight; camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h); }
+  // Apply meta upgrades to player and loadout for this new run
+  applyMetaToRun();
+
+  if (world) world.startFloor(depth);
+  if (rooms) rooms.generateNewFloor(depth);
+
+  controls.getObject().position.set(0, player.height, 0);
+  spawnProtectedTime = 1.2; if (protectedBadge) protectedBadge.style.display = 'inline-block';
+
+  sound.resume(); sound.startAmbient(); sound.startMusic();
+  if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
+
+  if (home) home.style.display = 'none';
+  if (deathOverlay) deathOverlay.style.display = 'none';
+  updateWeaponsUI(); showOnlyGun(currentWeaponKey);
+}
+function endRunToHome() {
+  // Bank gold to wallet
+  if (runGold > 0) {
+    meta.wallet += runGold;
+    saveMeta();
+  }
+  if (home) home.style.display = 'grid';
+  if (pauseOverlay) pauseOverlay.style.display = 'none';
+  if (deathOverlay) deathOverlay.style.display = 'none';
+  state = State.HOME;
+  renderShop();
+}
+function die() {
+  if (state !== State.RUN) return;
+  state = State.DEAD;
+  if (document.exitPointerLock) document.exitPointerLock();
+  if (deathOverlay) deathOverlay.style.display = 'grid';
+  // Bank gold and show stats
+  if (runGold > 0) {
+    meta.wallet += runGold;
+    saveMeta();
+  }
+  if (deathStats) deathStats.textContent = `Gold collected: ${runGold} (Wallet: ${meta.wallet})`;
+}
+
+// ==============================
+// PICKUPS
+// ==============================
+// Pickups
+function applyPickup(kind) {
+  sound.playPickup();
+  switch (kind) {
+    case 'health': player.health = Math.min(player.maxHealth, player.health + 25); break;
+    case 'shield': mods.shieldTime = Math.max(mods.shieldTime, 6.0); break;
+    case 'damage': mods.damageMult = 1.6; modTimers.damageMult = 12.0; break;
+    case 'firerate': mods.fireRateMult = 1.6; modTimers.fireRateMult = 12.0; break;
+    case 'weapon_rifle': unlockedWeapons.add('rifle'); currentWeaponKey = 'rifle'; break;
+    case 'weapon_shotgun': unlockedWeapons.add('shotgun'); currentWeaponKey = 'shotgun'; break;
+    case 'weapon_smg': unlockedWeapons.add('smg'); currentWeaponKey = 'smg'; break;
+    case 'ammo_rifle': ammo.rifle.reserve += 90; break;
+    case 'ammo_shotgun': ammo.shotgun.reserve += 24; break;
+    case 'ammo_smg': ammo.smg.reserve += 160; break;
+    case 'crit': mods.critChance = 0.22; modTimers.critChance = 12.0; break;
+    case 'armor': mods.armorMult = 0.8; modTimers.armorMult = 12.0; break;
+    case 'haste': mods.haste = 0.25; modTimers.haste = 10.0; break;
+  }
+  updateWeaponsUI(); showOnlyGun(currentWeaponKey);
+}
+function onGoldPickup(amount) { runGold += amount; sound.playCoin(); }
+
+// ==============================
+// Reload logic
+// ==============================
+function tryReload() {
+  if (reloading) return;
+  if (currentWeaponKey === 'pistol') return; // infinite
+  const a = ammo[currentWeaponKey];
+  const w = weapons[currentWeaponKey];
+  if (!a || !w) return;
+  const need = w.magSize - a.mag;
+  if (need <= 0 || a.reserve <= 0) return;
+  reloading = true;
+  reloadTimeLeft = w.reload;
+  setTimeout(() => {
+    const take = Math.min(need, a.reserve);
+    a.mag += take;
+    a.reserve -= take;
+    reloading = false;
+    reloadTimeLeft = 0;
+    updateWeaponsUI();
+  }, Math.max(0, w.reload) * 1000);
+}
+
+// ==============================
+// Simple shoot stub
+// ==============================
+function tryShoot() {
+  const now = performance.now() / 1000;
+  const w = weapons[currentWeaponKey];
+  if (!w) return;
+  if (reloading) return;
+  const fireGap = (1 / (w.fireRate * (mods.fireRateMult || 1)));
+  if (now < nextFireTime) return;
+
+  // Ammo check
+  const a = ammo[currentWeaponKey];
+  if (currentWeaponKey !== 'pistol') {
+    if (!a || a.mag <= 0) { return; }
+    a.mag -= 1;
+    updateWeaponsUI();
+  }
+
+  nextFireTime = now + fireGap;
+
+  // Muzzle flash
+  muzzle.visible = true;
+  setTimeout(() => { muzzle.visible = false; }, 40);
+
+  // sound.playShoot && sound.playShoot(currentWeaponKey);
+}
+
+// ==============================
+// Resize + loop
+// ==============================
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix(); renderer.setSize(w, h);
+}
 window.addEventListener('resize', resize);
 
+// Main render loop (add your world/rooms update calls if available)
+const clock = new THREE.Clock();
 function loop() {
+  const dt = clock.getDelta();
+
+  // Optional updates if your World/Rooms expose them:
+  if (world && typeof world.update === 'function') world.update(dt, { state, isPaused, player, input, controls, mods, spawnProtectedTime });
+  if (rooms && typeof rooms.update === 'function') rooms.update(dt);
+
+  // Tick temporary effects
+  if (spawnProtectedTime > 0) {
+    spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
+    if (protectedBadge) protectedBadge.style.display = spawnProtectedTime > 0 ? 'inline-block' : 'none';
+  }
+
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
 }
+
+// ==============================
+// UI wiring (buttons that don't depend on bootstrap objects)
+// ==============================
+startRunBtn && startRunBtn.addEventListener('click', () => startRun());
+resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
+restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
+toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
+startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
+
+// ==============================
+// Bootstrap: no top-level await
+// ==============================
+(async function bootstrap() {
+  if (home) home.style.display = 'grid';
+  renderShop();
+
+  assets = new Assets(sound.ctx);
+  await assets.loadAll(ASSET_MANIFEST); // empty manifest is fine
+
+  world = new World(scene, assets);
+  rooms = new RoomManager(world, null, (kind) => applyPickup(kind), assets);
+  rooms.setTeleport((dest) => controls.getObject().position.copy(dest));
+
+  // Let world know player height
+  if (world) world.playerHeight = player.height;
+
+  // Build first-person weapons
+  buildGunModels();
+
+  updateWeaponsUI(); showOnlyGun(currentWeaponKey);
+
+  resize();
+  requestAnimationFrame(loop);
+})();
