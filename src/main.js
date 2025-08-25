@@ -61,6 +61,28 @@ camera.position.set(0, 1.7, 0);
 const controls = new PointerLockControls(camera, renderer.domElement);
 scene.add(controls.getObject());
 
+// Pointer lock wiring and diagnostics
+controls.addEventListener('lock', () => {
+  if (state === State.PAUSE) {
+    isPaused = false;
+    state = State.RUN;
+    if (pauseOverlay) pauseOverlay.style.display = 'none';
+  }
+});
+controls.addEventListener('unlock', () => {
+  if (state === State.RUN) setPaused(true);
+});
+document.addEventListener('pointerlockerror', (e) => {
+  console.warn('Pointer Lock error:', e);
+});
+// Canvas click fallback to request lock when running
+renderer.domElement.addEventListener('click', () => {
+  const locked = document.pointerLockElement === renderer.domElement;
+  if (!locked && state === State.RUN && !isPaused) {
+    try { controls.lock(); } catch (e) { console.warn('controls.lock() on canvas click failed:', e); }
+  }
+});
+
 // ==============================
 // Input
 // ==============================
@@ -73,6 +95,21 @@ window.addEventListener('mousedown', (e) => {
   if (e.button === 0) { mouseDownLeft = true; tryShoot(); }
 });
 window.addEventListener('mouseup', (e) => { if (e.button === 0) mouseDownLeft = false; });
+
+// Minimal WASD movement fallback (if World.update doesn't handle it)
+const keys = { w:false, a:false, s:false, d:false };
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyW') keys.w = true;
+  if (e.code === 'KeyA') keys.a = true;
+  if (e.code === 'KeyS') keys.s = true;
+  if (e.code === 'KeyD') keys.d = true;
+});
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyW') keys.w = false;
+  if (e.code === 'KeyA') keys.a = false;
+  if (e.code === 'KeyS') keys.s = false;
+  if (e.code === 'KeyD') keys.d = false;
+});
 
 // ==============================
 // Sound
@@ -225,7 +262,7 @@ function renderShop() {
   parts.push(`<div class="panel">`);
   parts.push(`<h2 style="margin:0 0 8px 0;">Upgrades Shop</h2>`);
   parts.push(`<div style="color:#cbd5e1;font-size:13px;margin-bottom:8px;">Wallet: <strong>${meta.wallet}</strong> gold</div>`);
-  // CHANGED: make the grid 2 columns instead of 1
+  // Two columns
   parts.push(`<div class="grid" style="grid-template-columns: repeat(2, minmax(280px, 360px));">`);
   for (const it of items) {
     const id = `buy_${it.key}`;
@@ -286,7 +323,6 @@ function applyMetaToRun() {
   unlockedWeapons = new Set(['pistol']);
   if (u.startRifle) unlockedWeapons.add('rifle');
   if (u.startShotgun) unlockedWeapons.add('shotgun');
-  // Keep SMG locked by default; can be unlocked in run via gameplay
 
   // Ensure starting ammo reasonable
   if (u.startRifle) { ammo.rifle.mag = 30; ammo.rifle.reserve = Math.max(ammo.rifle.reserve, 90); }
@@ -298,7 +334,7 @@ function applyMetaToRun() {
   showOnlyGun(currentWeaponKey);
 }
 
-// Helper for awarding gold during the run (call this from gameplay when collecting)
+// Helper for awarding gold during the run
 function addGold(n) { runGold += Math.max(0, Math.floor(n)); }
 
 // ==============================
@@ -386,17 +422,20 @@ function setPaused(p) {
   if (state !== State.RUN && !(state === State.PAUSE && !p)) return;
   isPaused = p; state = p ? State.PAUSE : State.RUN;
   if (pauseOverlay) pauseOverlay.style.display = p ? 'grid' : 'none';
-  if (p) { if (document.exitPointerLock) document.exitPointerLock(); }
-  else { if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock(); }
+  if (p) {
+    try { controls.unlock(); } catch {}
+  } else {
+    // Do not auto-lock here; rely on button/canvas click (user gesture)
+  }
 }
-document.addEventListener('pointerlockchange', () => {
-  const locked = document.pointerLockElement === renderer.domElement;
-  if (!locked && state === State.RUN) setPaused(true);
-});
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyP' || e.code === 'Escape') {
     if (state === State.RUN) setPaused(true);
-    else if (state === State.PAUSE) setPaused(false);
+    else if (state === State.PAUSE) {
+      setPaused(false);
+      // user gesture via key may not be accepted by all browsers; use canvas click if needed
+      try { controls.lock(); } catch (err) {}
+    }
   }
   if (state === State.RUN && !isPaused) {
     if (e.code === 'Digit1') { if (unlockedWeapons.has('pistol')) currentWeaponKey = 'pistol'; }
@@ -425,11 +464,16 @@ function startRun() {
   controls.getObject().position.set(0, player.height, 0);
   spawnProtectedTime = 1.2; if (protectedBadge) protectedBadge.style.display = 'inline-block';
 
-  sound.resume(); sound.startAmbient(); sound.startMusic();
-  if (renderer.domElement.requestPointerLock) renderer.domElement.requestPointerLock();
-
+  // Hide overlays BEFORE locking
   if (home) home.style.display = 'none';
   if (deathOverlay) deathOverlay.style.display = 'none';
+  if (pauseOverlay) pauseOverlay.style.display = 'none';
+
+  sound.resume(); sound.startAmbient(); sound.startMusic();
+
+  // Request pointer lock using the controls API; must be from user gesture (Start button click)
+  try { controls.lock(); } catch (e) { console.warn('controls.lock() failed:', e); }
+
   updateWeaponsUI(); showOnlyGun(currentWeaponKey);
 }
 function endRunToHome() {
@@ -447,7 +491,7 @@ function endRunToHome() {
 function die() {
   if (state !== State.RUN) return;
   state = State.DEAD;
-  if (document.exitPointerLock) document.exitPointerLock();
+  try { controls.unlock(); } catch {}
   if (deathOverlay) deathOverlay.style.display = 'grid';
   // Bank gold and show stats
   if (runGold > 0) {
@@ -460,9 +504,8 @@ function die() {
 // ==============================
 // PICKUPS
 // ==============================
-// Pickups
 function applyPickup(kind) {
-  sound.playPickup();
+  if (sound.playPickup) sound.playPickup();
   switch (kind) {
     case 'health': player.health = Math.min(player.maxHealth, player.health + 25); break;
     case 'shield': mods.shieldTime = Math.max(mods.shieldTime, 6.0); break;
@@ -480,7 +523,7 @@ function applyPickup(kind) {
   }
   updateWeaponsUI(); showOnlyGun(currentWeaponKey);
 }
-function onGoldPickup(amount) { runGold += amount; sound.playCoin(); }
+function onGoldPickup(amount) { runGold += amount; if (sound.playCoin) sound.playCoin(); }
 
 // ==============================
 // Reload logic
@@ -530,7 +573,7 @@ function tryShoot() {
   muzzle.visible = true;
   setTimeout(() => { muzzle.visible = false; }, 40);
 
-  // sound.playShoot && sound.playShoot(currentWeaponKey);
+  if (sound.playShoot) sound.playShoot(currentWeaponKey);
 }
 
 // ==============================
@@ -542,7 +585,7 @@ function resize() {
 }
 window.addEventListener('resize', resize);
 
-// Main render loop (add your world/rooms update calls if available)
+// Main render loop
 const clock = new THREE.Clock();
 function loop() {
   const dt = clock.getDelta();
@@ -551,11 +594,32 @@ function loop() {
   if (world && typeof world.update === 'function') world.update(dt, { state, isPaused, player, input, controls, mods, spawnProtectedTime });
   if (rooms && typeof rooms.update === 'function') rooms.update(dt);
 
-  // Tick temporary effects
+  // Minimal local movement fallback
+  if (state === State.RUN && !isPaused) {
+    const moveSpeed = (player.baseSpeed * (1 + (mods.haste || 0))) * dt;
+    let forward = (keys.w ? 1 : 0) - (keys.s ? 1 : 0);
+    let right = (keys.d ? 1 : 0) - (keys.a ? 1 : 0);
+    if (forward || right) {
+      const len = Math.hypot(forward, right);
+      if (len > 0) { forward /= len; right /= len; }
+      controls.moveForward(forward * moveSpeed);
+      controls.moveRight(right * moveSpeed);
+    }
+  }
+
+  // Tick spawn protection
   if (spawnProtectedTime > 0) {
     spawnProtectedTime = Math.max(0, spawnProtectedTime - dt);
     if (protectedBadge) protectedBadge.style.display = spawnProtectedTime > 0 ? 'inline-block' : 'none';
   }
+
+  // Tick timed mods
+  if (modTimers.damageMult > 0) { modTimers.damageMult -= dt; if (modTimers.damageMult <= 0) mods.damageMult = 1.0; }
+  if (modTimers.fireRateMult > 0) { modTimers.fireRateMult -= dt; if (modTimers.fireRateMult <= 0) mods.fireRateMult = 1.0; }
+  if (modTimers.critChance > 0) { modTimers.critChance -= dt; if (modTimers.critChance <= 0) mods.critChance = 0.0; }
+  if (modTimers.armorMult > 0) { modTimers.armorMult -= dt; if (modTimers.armorMult <= 0) mods.armorMult = 1.0; }
+  if (modTimers.haste > 0) { modTimers.haste -= dt; if (modTimers.haste <= 0) mods.haste = 0.0; }
+  if (mods.shieldTime > 0) { mods.shieldTime = Math.max(0, mods.shieldTime - dt); }
 
   renderer.render(scene, camera);
   requestAnimationFrame(loop);
@@ -565,7 +629,7 @@ function loop() {
 // UI wiring (buttons that don't depend on bootstrap objects)
 // ==============================
 startRunBtn && startRunBtn.addEventListener('click', () => startRun());
-resumeBtn && resumeBtn.addEventListener('click', () => setPaused(false));
+resumeBtn && resumeBtn.addEventListener('click', () => { setPaused(false); try { controls.lock(); } catch {} });
 restartBtn && restartBtn.addEventListener('click', () => endRunToHome());
 toHomeBtn && toHomeBtn.addEventListener('click', () => endRunToHome());
 startAgainBtn && startAgainBtn.addEventListener('click', () => { if (home) home.style.display = 'none'; startRun(); });
